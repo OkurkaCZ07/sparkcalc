@@ -1,6 +1,6 @@
 'use client';
 import { useState, useCallback, useEffect } from 'react';
-import { askAI, AI_SUGGESTIONS } from '@/lib/ai';
+import { askAI, getSuggestions } from '@/lib/ai';
 import { checkAILimit, recordAIUsage } from '@/lib/rateLimit';
 import { al } from '@/lib/calcTranslations';
 import { useLanguage } from '@/lib/LanguageContext';
@@ -24,7 +24,7 @@ export default function AIPanel({ context, toolId }) {
     setLoading(false);
   }, [context, toolId, lang]);
 
-  const suggestions = AI_SUGGESTIONS[toolId] || [];
+  const suggestions = getSuggestions(toolId, lang);
 
   const renderText = (text) => {
     return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) => {

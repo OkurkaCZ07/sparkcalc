@@ -104,3 +104,11 @@ export const AI_LABELS = {
 
 export function cl(key, lang) { return CALC_LABELS[key]?.[lang] || CALC_LABELS[key]?.en || key; }
 export function al(key, lang) { return AI_LABELS[key]?.[lang] || AI_LABELS[key]?.en || key; }
+
+// Additional UI translations
+export const UI_EXTRA = {
+  headerSubtitle: { en:'AI-POWERED ELECTRONICS TOOLKIT', cs:'ELEKTRONICKÁ SADA S UMĚLOU INTELIGENCÍ', de:'KI-GESTÜTZTES ELEKTRONIK-TOOLKIT', es:'HERRAMIENTAS ELECTRÓNICAS CON IA', fr:"BOÎTE À OUTILS ÉLECTRONIQUE IA", ja:'AI搭載エレクトロニクスツールキット' },
+  calculator: { en:'Calculator', cs:'Kalkulačka', de:'Rechner', es:'Calculadora', fr:'Calculateur', ja:'計算ツール' },
+  decoder: { en:'Decoder', cs:'Dekodér', de:'Dekodierer', es:'Decodificador', fr:'Décodeur', ja:'デコーダ' },
+};
+export function ui(key, lang) { return UI_EXTRA[key]?.[lang] || UI_EXTRA[key]?.en || key; }

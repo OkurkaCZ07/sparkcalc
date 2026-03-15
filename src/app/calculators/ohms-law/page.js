@@ -1,4 +1,22 @@
+'use client';
 import Layout from '@/components/Layout';
 import OhmsLawCalc from '@/components/calculators/OhmsLaw';
-export const metadata = { title: "Ohm's Law Calculator", description: "Calculate voltage, current, resistance and power." };
-export default function Page() { return (<Layout><div className="mb-5"><h1 className="text-2xl font-bold tracking-tight">Ω Ohm&#39;s Law <span className="text-sc-accent">Calculator</span></h1><p className="text-sm text-sc-dim mt-1">Calculate any electrical quantity from the other two.</p></div><OhmsLawCalc /></Layout>); }
+import { CALCULATORS, getCalcName, getCalcDesc } from '@/lib/utils';
+import { useLanguage } from '@/lib/LanguageContext';
+import { ui } from '@/lib/calcTranslations';
+
+export default function Page() {
+  const { lang } = useLanguage();
+  const calc = CALCULATORS.find(c => c.id === 'ohms-law');
+  return (
+    <Layout>
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold tracking-tight" style={{color:'var(--sc-text)'}}>
+          {calc.icon} {getCalcName(calc, lang)} <span style={{color:'var(--sc-accent)'}}>{ui('calculator', lang)}</span>
+        </h1>
+        <p className="text-sm mt-1" style={{color:'var(--sc-dim)'}}>{getCalcDesc(calc, lang)}</p>
+      </div>
+      <OhmsLawCalc />
+    </Layout>
+  );
+}
