@@ -2,7 +2,7 @@
 import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import Layout from '@/components/Layout';
-import { CALCULATORS, CATEGORIES, searchCalculators, getCalculatorsByCategory, t } from '@/lib/utils';
+import { CALCULATORS, CATEGORIES, searchCalculators, getCalculatorsByCategory, getCalcName, getCalcDesc, getCatName, t } from '@/lib/utils';
 import { useLanguage } from '@/lib/LanguageContext';
 
 function SearchBar({ query, setQuery, placeholder }) {
@@ -26,8 +26,8 @@ function CalculatorCard({ calc, lang }) {
       <div className="flex items-start gap-3">
         <span className="text-2xl mt-0.5">{calc.icon}</span>
         <div className="flex-1 min-w-0">
-          <h3 className="text-sm font-bold text-sc-text group-hover:text-sc-accent transition-colors">{calc.name}</h3>
-          <p className="text-xs text-sc-dim mt-1 leading-relaxed line-clamp-2">{calc.desc}</p>
+          <h3 className="text-sm font-bold text-sc-text group-hover:text-sc-accent transition-colors">{getCalcName(calc, lang)}</h3>
+          <p className="text-xs text-sc-dim mt-1 leading-relaxed line-clamp-2">{getCalcDesc(calc, lang)}</p>
         </div>
       </div>
       <div className="mt-2.5 flex items-center gap-1.5 text-[9px] text-sc-accent font-semibold uppercase tracking-wider">
@@ -44,7 +44,7 @@ function CategorySection({ category, calculators, lang }) {
     <section className="mb-8 animate-fade-in">
       <div className="flex items-center gap-2 mb-3">
         <span className="text-xl">{category.icon}</span>
-        <h2 className="text-lg font-bold text-sc-text">{category.name}</h2>
+        <h2 className="text-lg font-bold text-sc-text">{getCatName(category, lang)}</h2>
         <span className="text-xs text-sc-dim ml-1">({calculators.length})</span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -59,7 +59,7 @@ export default function HomePage() {
   const [query, setQuery] = useState('');
   const [viewMode, setViewMode] = useState('categories');
 
-  const results = useMemo(() => searchCalculators(query), [query]);
+  const results = useMemo(() => searchCalculators(query, lang), [query, lang]);
   const isSearching = query.trim().length > 0;
 
   return (
@@ -92,7 +92,7 @@ export default function HomePage() {
       {isSearching ? (
         <div className="max-w-5xl mx-auto">
           <p className="text-sm text-sc-dim mb-4">
-            {results.length > 0 ? `Found ${results.length} calculator${results.length !== 1 ? 's' : ''} for "${query}"` : t(lang, 'noResults')}
+            {results.length > 0 ? `${results.length} ${t(lang, 'allCalculators').toLowerCase()}` : t(lang, 'noResults')}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {results.map((calc) => <CalculatorCard key={calc.id} calc={calc} lang={lang} />)}
@@ -120,8 +120,9 @@ export default function HomePage() {
       )}
 
       <section className="max-w-2xl mx-auto mt-12 text-sm text-sc-dim leading-relaxed space-y-4">
-        <h2 className="text-lg font-bold text-sc-text">Why SparkCalc?</h2>
-        <p>SparkCalc offers free, browser-based electronics calculators for hobbyists, students, and engineers. Our AI assistant provides real-world design guidance — recommending standard component values, checking safety margins, and helping optimize your circuits.</p>
+        <h2 className="text-lg font-bold text-sc-text">{t(lang, 'whyTitle')}</h2>
+        <p>{t(lang, 'whyText')}</p>
+        <p>{t(lang, 'whyText2')}</p>
       </section>
     </Layout>
   );
