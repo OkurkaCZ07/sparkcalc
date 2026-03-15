@@ -1,20 +1,16 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import Link from 'next/link';
 import Layout from '@/components/Layout';
 import { CALCULATORS, CATEGORIES, searchCalculators, getCalculatorsByCategory, t } from '@/lib/utils';
+import { useLanguage } from '@/lib/LanguageContext';
 
 function SearchBar({ query, setQuery, placeholder }) {
   return (
     <div className="relative max-w-2xl mx-auto">
       <div className="absolute left-4 top-1/2 -translate-y-1/2 text-sc-dim text-lg">🔍</div>
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-sc-surface border border-sc-border rounded-2xl pl-12 pr-4 py-4 text-sc-text text-sm outline-none focus:border-sc-accent/50 focus:shadow-[0_0_20px_rgba(255,140,66,0.08)] transition-all font-display placeholder:text-sc-dim/50"
-      />
+      <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={placeholder}
+        className="w-full bg-sc-surface border border-sc-border rounded-2xl pl-12 pr-4 py-4 text-sc-text text-sm outline-none focus:border-sc-accent/50 focus:shadow-[0_0_20px_rgba(255,140,66,0.08)] transition-all font-display placeholder:text-sc-dim/50" />
       {query && (
         <button onClick={() => setQuery('')}
           className="absolute right-4 top-1/2 -translate-y-1/2 text-sc-dim hover:text-sc-text text-lg cursor-pointer transition-colors">✕</button>
@@ -23,7 +19,7 @@ function SearchBar({ query, setQuery, placeholder }) {
   );
 }
 
-function CalculatorCard({ calc }) {
+function CalculatorCard({ calc, lang }) {
   return (
     <Link href={`/calculators/${calc.id}`}
       className="tool-card block bg-sc-surface border border-sc-border rounded-2xl p-4 no-underline group">
@@ -36,7 +32,7 @@ function CalculatorCard({ calc }) {
       </div>
       <div className="mt-2.5 flex items-center gap-1.5 text-[9px] text-sc-accent font-semibold uppercase tracking-wider">
         <div className="w-1.5 h-1.5 rounded-full bg-sc-green shadow-[0_0_4px_theme(colors.sc.green)]" />
-        AI Assistant
+        {t(lang, 'aiAvailable')}
       </div>
     </Link>
   );
@@ -52,31 +48,22 @@ function CategorySection({ category, calculators, lang }) {
         <span className="text-xs text-sc-dim ml-1">({calculators.length})</span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {calculators.map((calc) => <CalculatorCard key={calc.id} calc={calc} />)}
+        {calculators.map((calc) => <CalculatorCard key={calc.id} calc={calc} lang={lang} />)}
       </div>
     </section>
   );
 }
 
 export default function HomePage() {
+  const { lang } = useLanguage();
   const [query, setQuery] = useState('');
-  const [lang, setLang] = useState('en');
-  const [viewMode, setViewMode] = useState('categories'); // 'categories' or 'all'
-
-  useEffect(() => {
-    const saved = typeof window !== 'undefined' && localStorage.getItem('sc_lang');
-    if (saved) setLang(saved);
-    const handler = () => setLang(localStorage.getItem('sc_lang') || 'en');
-    window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
-  }, []);
+  const [viewMode, setViewMode] = useState('categories');
 
   const results = useMemo(() => searchCalculators(query), [query]);
   const isSearching = query.trim().length > 0;
 
   return (
     <Layout>
-      {/* Hero */}
       <div className="text-center pt-8 pb-6">
         <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-3">
           {t(lang, 'heroTitle')}{' '}
@@ -85,11 +72,7 @@ export default function HomePage() {
         <p className="text-sc-dim text-sm max-w-lg mx-auto leading-relaxed mb-6">
           {t(lang, 'heroDesc')}
         </p>
-
-        {/* Search */}
         <SearchBar query={query} setQuery={setQuery} placeholder={t(lang, 'searchPlaceholder')} />
-
-        {/* Stats bar */}
         <div className="flex items-center justify-center gap-6 mt-5 text-xs text-sc-dim">
           <span className="flex items-center gap-1.5">
             <span className="text-sc-accent font-bold text-base">{CALCULATORS.length}</span> {t(lang, 'allCalculators').toLowerCase()}
@@ -106,21 +89,17 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* Search results */}
       {isSearching ? (
         <div className="max-w-5xl mx-auto">
           <p className="text-sm text-sc-dim mb-4">
-            {results.length > 0
-              ? `Found ${results.length} calculator${results.length !== 1 ? 's' : ''} for "${query}"`
-              : t(lang, 'noResults')}
+            {results.length > 0 ? `Found ${results.length} calculator${results.length !== 1 ? 's' : ''} for "${query}"` : t(lang, 'noResults')}
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {results.map((calc) => <CalculatorCard key={calc.id} calc={calc} />)}
+            {results.map((calc) => <CalculatorCard key={calc.id} calc={calc} lang={lang} />)}
           </div>
         </div>
       ) : (
         <>
-          {/* View toggle */}
           <div className="flex justify-center gap-2 mb-6">
             <button onClick={() => setViewMode('categories')}
               className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer border ${
@@ -131,26 +110,18 @@ export default function HomePage() {
                 viewMode === 'all' ? 'bg-sc-accent/10 border-sc-accent text-sc-accent' : 'bg-sc-surface border-sc-border text-sc-dim hover:border-sc-accent/40'
               }`}>{t(lang, 'allCalculators')}</button>
           </div>
-
           <div className="max-w-5xl mx-auto">
-            {viewMode === 'categories' ? (
-              CATEGORIES.map((cat) => (
-                <CategorySection key={cat.id} category={cat} calculators={getCalculatorsByCategory(cat.id)} lang={lang} />
-              ))
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {CALCULATORS.map((calc) => <CalculatorCard key={calc.id} calc={calc} />)}
-              </div>
-            )}
+            {viewMode === 'categories'
+              ? CATEGORIES.map((cat) => <CategorySection key={cat.id} category={cat} calculators={getCalculatorsByCategory(cat.id)} lang={lang} />)
+              : <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">{CALCULATORS.map((calc) => <CalculatorCard key={calc.id} calc={calc} lang={lang} />)}</div>
+            }
           </div>
         </>
       )}
 
-      {/* SEO content */}
       <section className="max-w-2xl mx-auto mt-12 text-sm text-sc-dim leading-relaxed space-y-4">
         <h2 className="text-lg font-bold text-sc-text">Why SparkCalc?</h2>
-        <p>SparkCalc offers free, browser-based electronics calculators for hobbyists, students, and engineers. Our AI assistant provides real-world design guidance — recommending standard component values, checking safety margins, and helping you optimize your circuits.</p>
-        <p>All calculators work instantly with no registration. Available in multiple languages with AI assistance free daily.</p>
+        <p>SparkCalc offers free, browser-based electronics calculators for hobbyists, students, and engineers. Our AI assistant provides real-world design guidance — recommending standard component values, checking safety margins, and helping optimize your circuits.</p>
       </section>
     </Layout>
   );

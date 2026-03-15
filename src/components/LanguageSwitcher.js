@@ -1,8 +1,10 @@
 'use client';
 import { useState, useRef, useEffect } from 'react';
 import { LANGUAGES } from '@/lib/utils';
+import { useLanguage } from '@/lib/LanguageContext';
 
-export default function LanguageSwitcher({ lang, setLang }) {
+export default function LanguageSwitcher() {
+  const { lang, setLang } = useLanguage();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const current = LANGUAGES.find(l => l.code === lang) || LANGUAGES[0];
@@ -21,7 +23,6 @@ export default function LanguageSwitcher({ lang, setLang }) {
         <span className="text-sc-text font-medium hidden sm:inline">{current.code.toUpperCase()}</span>
         <span className="text-sc-dim text-[10px]">▼</span>
       </button>
-
       {open && (
         <div className="absolute right-0 top-full mt-1 bg-sc-surface border border-sc-border rounded-xl shadow-2xl shadow-black/40 overflow-hidden z-50 min-w-[160px] animate-fade-in">
           {LANGUAGES.map((l) => (

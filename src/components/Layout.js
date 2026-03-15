@@ -1,22 +1,10 @@
 'use client';
-import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Navigation from './Navigation';
 import AdBanner from './AdBanner';
 import LanguageSwitcher from './LanguageSwitcher';
 
 export default function Layout({ children }) {
-  const [lang, setLang] = useState('en');
-
-  useEffect(() => {
-    const saved = typeof window !== 'undefined' && localStorage.getItem('sc_lang');
-    if (saved) setLang(saved);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') localStorage.setItem('sc_lang', lang);
-  }, [lang]);
-
   return (
     <div className="min-h-screen flex flex-col">
       <div className="accent-bar" />
@@ -30,12 +18,12 @@ export default function Layout({ children }) {
         </Link>
         <div className="flex items-center gap-3">
           <div className="text-[11px] font-semibold text-sc-accent border border-sc-accent/30 rounded-full px-3 py-1 bg-sc-accent/5 hidden md:block">✦ AI-Enhanced</div>
-          <LanguageSwitcher lang={lang} setLang={setLang} />
+          <LanguageSwitcher />
         </div>
       </header>
       <Navigation />
       <div className="px-5 py-3"><AdBanner slot="top" /></div>
-      <main className="flex-1 px-5 pb-5 animate-fade-in">{typeof children === 'function' ? children({ lang }) : children}</main>
+      <main className="flex-1 px-5 pb-5 animate-fade-in">{children}</main>
       <div className="px-5 py-3"><AdBanner slot="inline" /></div>
       <footer className="px-5 py-4 text-center text-[11px] text-sc-dim border-t border-sc-border space-y-1">
         <p>SparkCalc © {new Date().getFullYear()} · Free electronics calculators with AI-powered insights</p>
