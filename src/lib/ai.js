@@ -109,3 +109,13 @@ export function getSuggestions(toolId, lang) {
   if (!s) return [];
   return s[lang] || s.en || [];
 }
+
+// Add to AI_SUGGESTIONS
+AI_SUGGESTIONS['prototyper'] = {
+  en: ['Will this circuit work? Check for any issues.', 'What components am I missing for a complete circuit?', 'Suggest improvements to my design.'],
+  cs: ['Bude tento obvod fungovat? Zkontroluj případné problémy.', 'Jaké součástky mi chybí pro kompletní obvod?', 'Navrhni vylepšení mého návrhu.'],
+  de: ['Wird diese Schaltung funktionieren? Prüfe auf Probleme.', 'Welche Bauteile fehlen für einen vollständigen Schaltkreis?', 'Schlage Verbesserungen vor.'],
+  es: ['¿Funcionará este circuito? Verifica problemas.', '¿Qué componentes me faltan para un circuito completo?', 'Sugiere mejoras para mi diseño.'],
+  fr: ['Ce circuit fonctionnera-t-il ? Vérifiez les problèmes.', 'Quels composants manquent pour un circuit complet ?', 'Suggérez des améliorations.'],
+  ja: ['この回路は動作しますか？問題をチェックしてください。', '完全な回路に必要な部品は何ですか？', '設計の改善を提案してください。'],
+};
