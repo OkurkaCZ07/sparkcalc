@@ -11,7 +11,7 @@ export default function PrototyperPage() {
           <span className="ml-2 text-[10px] font-semibold px-2 py-0.5 rounded-full align-middle" style={{ background: 'color-mix(in srgb, var(--sc-accent) 15%, transparent)', color: 'var(--sc-accent)' }}>BETA</span>
         </h1>
         <p className="text-sm mt-1" style={{ color: 'var(--sc-dim)' }}>
-          Place components on a 3D breadboard, connect them with wires, and let AI analyze your circuit design.
+          Build circuits on a 3D breadboard. Place components, connect with wires, and get real-time circuit analysis with AI feedback.
         </p>
       </div>
       <CircuitPrototyper />
