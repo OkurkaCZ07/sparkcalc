@@ -11,6 +11,7 @@ export default function RootLayout({ children }) {
         <title>SparkCalc — Free AI-Powered Electronics Calculators</title>
         <meta name="description" content="Free online electronics calculators with AI-powered design assistance." />
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+        <link rel="canonical" href="https://sparkcalc.app" />
 
         {/* CookieYes GDPR Banner — must load BEFORE analytics */}
         <Script
