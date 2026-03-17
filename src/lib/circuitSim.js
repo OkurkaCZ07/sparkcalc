@@ -33,18 +33,24 @@ export const COMP_DEFS = {
   'resistor-sm':  { name:'Small Resistor',  cat:'passive', color:'#c9935a', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'220Ω', symbol:'R' },
   'capacitor':    { name:'Ceramic Cap',     cat:'passive', color:'#2563eb', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'100nF', symbol:'C' },
   'cap-elec':     { name:'Electrolytic',    cat:'passive', color:'#1e40af', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'100µF', symbol:'C+', polar:true },
+  'inductor':     { name:'Inductor',        cat:'passive', color:'#7c3aed', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'10µH', symbol:'L' },
+  'ldr':          { name:'Photoresistor',   cat:'passive', color:'#fbbf24', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'10kΩ', symbol:'LDR' },
   'led-red':      { name:'LED Red',         cat:'led',     color:'#ef4444', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'2V 20mA', vF:2.0, maxI:0.025, polar:true, emissive:true },
   'led-green':    { name:'LED Green',       cat:'led',     color:'#22c55e', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'2.2V 20mA', vF:2.2, maxI:0.025, polar:true, emissive:true },
   'led-blue':     { name:'LED Blue',        cat:'led',     color:'#3b82f6', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'3.2V 20mA', vF:3.2, maxI:0.025, polar:true, emissive:true },
   'led-yellow':   { name:'LED Yellow',      cat:'led',     color:'#eab308', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'2.1V 20mA', vF:2.1, maxI:0.025, polar:true, emissive:true },
   'led-white':    { name:'LED White',       cat:'led',     color:'#e5e5e5', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'3.4V 20mA', vF:3.4, maxI:0.025, polar:true, emissive:true },
   'diode':        { name:'Diode 1N4148',    cat:'active',  color:'#f97316', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'1N4148', polar:true },
+  'zener':        { name:'Zener Diode',     cat:'active',  color:'#fb7185', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'5.1V', polar:true, zV:5.1 },
   'npn':          { name:'NPN 2N2222',      cat:'active',  color:'#a855f7', pins:[{dx:0,dy:0},{dx:1,dy:0},{dx:2,dy:0}], defaultVal:'2N2222', pinLabels:['E','B','C'] },
+  'pnp':          { name:'PNP 2N3906',      cat:'active',  color:'#c084fc', pins:[{dx:0,dy:0},{dx:1,dy:0},{dx:2,dy:0}], defaultVal:'2N3906', pinLabels:['E','B','C'] },
   'mosfet-n':     { name:'N-MOSFET',        cat:'active',  color:'#ef4444', pins:[{dx:0,dy:0},{dx:1,dy:0},{dx:2,dy:0}], defaultVal:'IRFZ44N', pinLabels:['S','G','D'] },
   'ic555':        { name:'555 Timer',       cat:'ic',      color:'#ec4899', pins:[{dx:0,dy:0},{dx:1,dy:0},{dx:2,dy:0},{dx:3,dy:0},{dx:0,dy:6},{dx:1,dy:6},{dx:2,dy:6},{dx:3,dy:6}], defaultVal:'NE555', pinLabels:['GND','TRIG','OUT','RST','VCC','DIS','THR','CV'], crossesChannel:true },
+  'lm358':        { name:'Op-Amp LM358',    cat:'ic',      color:'#60a5fa', pins:[{dx:0,dy:0},{dx:2,dy:0},{dx:0,dy:2},{dx:2,dy:2},{dx:1,dy:4}], defaultVal:'LM358', pinLabels:['V-','V+','IN-','IN+','OUT'] },
   'battery':      { name:'9V Battery',      cat:'power',   color:'#16a34a', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'9V', voltage:9, isSource:true, pinLabels:['+','−'] },
   'dc5v':         { name:'5V DC Supply',    cat:'power',   color:'#ff8c42', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'5V', voltage:5, isSource:true, pinLabels:['+','−'] },
-  'button':       { name:'Push Button',     cat:'switch',  color:'#94a3b8', pins:[{dx:0,dy:0},{dx:0,dy:6}], defaultVal:'Momentary', crossesChannel:true, isClosed:false },
+  'dc3v3':        { name:'3.3V DC Supply',  cat:'power',   color:'#38bdf8', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'3.3V', voltage:3.3, isSource:true, pinLabels:['+','−'] },
+  'button':       { name:'Push Button',     cat:'switch',  color:'#94a3b8', pins:[{dx:0,dy:0},{dx:2,dy:0},{dx:0,dy:6},{dx:2,dy:6}], defaultVal:'Momentary', crossesChannel:true, isClosed:false },
   'switch':       { name:'Toggle Switch',   cat:'switch',  color:'#64748b', pins:[{dx:0,dy:0},{dx:2,dy:0}], defaultVal:'SPST', isClosed:true },
   'pot':          { name:'Potentiometer',   cat:'passive', color:'#f59e0b', pins:[{dx:0,dy:0},{dx:1,dy:0},{dx:2,dy:0}], defaultVal:'10kΩ', pinLabels:['1','W','2'] },
   'buzzer':       { name:'Buzzer',          cat:'output',  color:'#22c55e', pins:[{dx:0,dy:0},{dx:1,dy:0}], defaultVal:'5V Active', polar:true },
@@ -287,3 +293,12 @@ export function simulate(components, wires) {
 
   return result;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prototyper v2 simulation engine (Canvas editor) re-export
+//
+// The prototyper uses a newer solver in `src/lib/prototyper/sim.js`.
+// We re-export it here to keep `src/lib/circuitSim.js` as the public sim entry.
+// ─────────────────────────────────────────────────────────────────────────────
+export { simulate as simulatePrototyper } from './prototyper/sim';
+
