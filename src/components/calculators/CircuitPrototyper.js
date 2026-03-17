@@ -2,630 +2,739 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import AIPanel from '@/components/AIPanel';
 import { useLanguage } from '@/lib/LanguageContext';
-import { analyzeCircuit } from '@/lib/circuitSim';
+import { COMP_DEFS, CATEGORIES, simulate } from '@/lib/circuitSim';
 
-// ─── Component Library ───
-const COMP_DEFS = [
-  { id:'resistor', name:'Resistor', icon:'▮', color:'#c9935a', cat:'passive', val:'10kΩ' },
-  { id:'capacitor', name:'Ceramic Cap', icon:'||', color:'#2563eb', cat:'passive', val:'100nF' },
-  { id:'cap-elec', name:'Electrolytic Cap', icon:'|+', color:'#1e40af', cat:'passive', val:'100µF 25V' },
-  { id:'inductor', name:'Inductor', icon:'∿', color:'#eab308', cat:'passive', val:'100µH' },
-  { id:'pot', name:'Potentiometer', icon:'↔', color:'#f59e0b', cat:'passive', val:'10kΩ' },
-  { id:'photo-res', name:'Photoresistor', icon:'☀', color:'#a16207', cat:'passive', val:'LDR' },
-  { id:'fuse', name:'Fuse', icon:'—|—', color:'#94a3b8', cat:'passive', val:'1A' },
-  { id:'led-red', name:'LED Red', icon:'◉', color:'#ef4444', cat:'led', val:'2V 20mA' },
-  { id:'led-green', name:'LED Green', icon:'◉', color:'#22c55e', cat:'led', val:'2.2V 20mA' },
-  { id:'led-blue', name:'LED Blue', icon:'◉', color:'#3b82f6', cat:'led', val:'3.2V 20mA' },
-  { id:'led-yellow', name:'LED Yellow', icon:'◉', color:'#eab308', cat:'led', val:'2.1V 20mA' },
-  { id:'led-white', name:'LED White', icon:'◉', color:'#e2e8f0', cat:'led', val:'3.4V 20mA' },
-  { id:'diode', name:'Diode 1N4148', icon:'▷|', color:'#f97316', cat:'active', val:'1N4148' },
-  { id:'zener', name:'Zener Diode', icon:'▷Z', color:'#8b5cf6', cat:'active', val:'5.1V' },
-  { id:'npn', name:'NPN 2N2222', icon:'⊳', color:'#a855f7', cat:'active', val:'2N2222' },
-  { id:'pnp', name:'PNP 2N3906', icon:'⊲', color:'#c084fc', cat:'active', val:'2N3906' },
-  { id:'mosfet-n', name:'N-MOSFET', icon:'⊳|', color:'#ef4444', cat:'active', val:'IRFZ44N' },
-  { id:'mosfet-p', name:'P-MOSFET', icon:'⊲|', color:'#f87171', cat:'active', val:'IRF9540' },
-  { id:'ic555', name:'555 Timer', icon:'■', color:'#ec4899', cat:'ic', val:'NE555' },
-  { id:'ic-opamp', name:'Op-Amp', icon:'△', color:'#06b6d4', cat:'ic', val:'LM358' },
-  { id:'seven-seg', name:'7-Segment', icon:'8', color:'#ef4444', cat:'ic', val:'Common Cathode' },
-  { id:'battery', name:'9V Battery', icon:'🔋', color:'#16a34a', cat:'power', val:'9V' },
-  { id:'dc-supply', name:'DC 5V Supply', icon:'⚡', color:'#ff8c42', cat:'power', val:'5V' },
-  { id:'usb-power', name:'USB Power', icon:'⏻', color:'#ef4444', cat:'power', val:'5V 500mA' },
-  { id:'button', name:'Push Button', icon:'⊡', color:'#94a3b8', cat:'switch', val:'Momentary' },
-  { id:'switch', name:'Toggle Switch', icon:'⊟', color:'#64748b', cat:'switch', val:'SPST' },
-  { id:'buzzer', name:'Buzzer', icon:'♪', color:'#22c55e', cat:'output', val:'5V Active' },
-  { id:'motor-dc', name:'DC Motor', icon:'⊙', color:'#3b82f6', cat:'output', val:'6V' },
-  { id:'relay', name:'Relay', icon:'⎍', color:'#6366f1', cat:'output', val:'5V SPDT' },
-];
+// ─── Constants ───
+const COLS = 30, ROWS = 10, GAP = 5; // gap between row 4 and 5 (channel)
+const CELL = 22; // pixels per cell
+const PAD_X = 60, PAD_Y = 50; // padding around breadboard
+const BB_W = COLS * CELL, BB_H = (ROWS + 1) * CELL; // +1 for channel gap
+const CANVAS_W = BB_W + PAD_X * 2;
+const CANVAS_H = BB_H + PAD_Y * 2;
 
-const CATS = [
-  { id:'passive', name:'Passive' },
-  { id:'led', name:'LEDs' },
-  { id:'active', name:'Semiconductors' },
-  { id:'ic', name:'ICs' },
-  { id:'power', name:'Power' },
-  { id:'switch', name:'Switches' },
-  { id:'output', name:'Output' },
-];
+// Hole pixel position
+function holePos(col, row) {
+  let y = row * CELL;
+  if (row >= GAP) y += CELL; // shift bottom half down for channel
+  return { x: PAD_X + col * CELL, y: PAD_Y + y };
+}
 
-const BB_COLS = 30;
-const BB_ROWS = 12;
-const HS = 0.32; // hole spacing
-
-// ─── 3D Scene ───
-function Scene3D({ placed, wires, tool, wireMode, wireStart, onClickHole, onHover, hovered }) {
-  const mountRef = useRef(null);
-  const stateRef = useRef({ scene:null, cam:null, rend:null, THREE:null, holes:[], compGrp:null, wireGrp:null });
-  const orbitRef = useRef({ theta: 0.6, phi: 0.7, dist: 10, tx: 0, ty: 0, tz: 0 });
-  const dragRef = useRef({ on:false, btn:-1, lx:0, ly:0, moved:false });
-  const frameRef = useRef(null);
-
-  // Init
-  useEffect(() => {
-    if (!mountRef.current) return;
-    let dead = false;
-    const go = async () => {
-      const THREE = await import('three');
-      if (dead) return;
-      const S = stateRef.current;
-      S.THREE = THREE;
-      const el = mountRef.current;
-      const w = el.clientWidth, h = el.clientHeight;
-
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0c0d14);
-      S.scene = scene;
-
-      const cam = new THREE.PerspectiveCamera(45, w/h, 0.1, 200);
-      S.cam = cam;
-
-      const rend = new THREE.WebGLRenderer({ antialias:true });
-      rend.setSize(w, h);
-      rend.setPixelRatio(Math.min(devicePixelRatio, 2));
-      rend.shadowMap.enabled = true;
-      rend.shadowMap.type = THREE.PCFSoftShadowMap;
-      el.appendChild(rend.domElement);
-      S.rend = rend;
-
-      // Lights
-      scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-      const sun = new THREE.DirectionalLight(0xffffff, 0.75);
-      sun.position.set(5, 12, 7);
-      sun.castShadow = true;
-      sun.shadow.mapSize.set(1024, 1024);
-      scene.add(sun);
-      scene.add(new THREE.PointLight(0xff8c42, 0.12, 25).translateX(-5).translateY(6));
-
-      // Desk
-      const desk = new THREE.Mesh(
-        new THREE.PlaneGeometry(50, 50),
-        new THREE.MeshStandardMaterial({ color:0x171923, roughness:0.95 })
-      );
-      desk.rotation.x = -Math.PI/2; desk.position.y = -0.2; desk.receiveShadow = true;
-      scene.add(desk);
-      const grid = new THREE.GridHelper(50, 100, 0x1e2030, 0x161824);
-      grid.position.y = -0.19; scene.add(grid);
-
-      // ─── Breadboard ───
-      const bbW = BB_COLS * HS + 0.8, bbH = BB_ROWS * HS + 0.6;
-      const bb = new THREE.Group();
-
-      // Board body
-      const board = new THREE.Mesh(
-        new THREE.BoxGeometry(bbW, 0.22, bbH),
-        new THREE.MeshStandardMaterial({ color:0xf0ebe0, roughness:0.55 })
-      );
-      board.receiveShadow = true; board.castShadow = true;
-      bb.add(board);
-
-      // Center channel
-      const chan = new THREE.Mesh(
-        new THREE.BoxGeometry(bbW - 0.4, 0.23, 0.2),
-        new THREE.MeshStandardMaterial({ color:0xd8d2c2 })
-      );
-      chan.position.y = 0.005; bb.add(chan);
-
-      // Power rails
-      const rlGeo = new THREE.BoxGeometry(bbW - 0.6, 0.008, 0.04);
-      const mkRail = (z, col) => {
-        const m = new THREE.Mesh(rlGeo, new THREE.MeshStandardMaterial({ color: col }));
-        m.position.set(0, 0.115, z); bb.add(m);
-      };
-      const topZ = -bbH/2 + 0.2, botZ = bbH/2 - 0.2;
-      mkRail(topZ - 0.06, 0xcc2222);
-      mkRail(topZ + 0.06, 0x2222cc);
-      mkRail(botZ - 0.06, 0xcc2222);
-      mkRail(botZ + 0.06, 0x2222cc);
-
-      // Holes — use larger invisible click targets
-      const holeVisGeo = new THREE.CylinderGeometry(0.035, 0.035, 0.23, 8);
-      const holeClickGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.3, 8);
-      const holeVisMat = new THREE.MeshStandardMaterial({ color:0x2a2a2a, roughness:0.2 });
-      const holeClickMat = new THREE.MeshBasicMaterial({ visible:false });
-      const holes = [];
-
-      for (let c = 0; c < BB_COLS; c++) {
-        for (let r = 0; r < BB_ROWS; r++) {
-          if (r === 5 || r === 6) continue; // center channel gap
-          const x = (c - BB_COLS/2 + 0.5) * HS;
-          const z = (r - BB_ROWS/2 + 0.5) * HS;
-          // Visible hole
-          const vis = new THREE.Mesh(holeVisGeo, holeVisMat.clone());
-          vis.position.set(x, 0, z);
-          bb.add(vis);
-          // Invisible click target (larger)
-          const click = new THREE.Mesh(holeClickGeo, holeClickMat);
-          click.position.set(x, 0.05, z);
-          click.userData = { col: c, row: r, visMesh: vis };
-          bb.add(click);
-          holes.push(click);
-        }
+// Hit test: find hole near pixel coords
+function hitTest(px, py, zoom, panX, panY) {
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      const { x, y } = holePos(c, r);
+      const sx = x * zoom + panX, sy = y * zoom + panY;
+      if (Math.abs(px - sx) < CELL * zoom * 0.45 && Math.abs(py - sy) < CELL * zoom * 0.45) {
+        return { col: c, row: r };
       }
-      S.holes = holes;
-      scene.add(bb);
+    }
+  }
+  return null;
+}
 
-      // Component + wire groups
-      const compGrp = new THREE.Group(); compGrp.name = 'comps'; scene.add(compGrp); S.compGrp = compGrp;
-      const wireGrp = new THREE.Group(); wireGrp.name = 'wires'; scene.add(wireGrp); S.wireGrp = wireGrp;
+// ─── Canvas Renderer ───
+function drawScene(ctx, w, h, zoom, panX, panY, components, wires, hovered, simResult, selectedTool, wireStart, simRunning) {
+  ctx.save();
+  ctx.clearRect(0, 0, w, h);
+  
+  // Background
+  ctx.fillStyle = '#0e1018';
+  ctx.fillRect(0, 0, w, h);
 
-      // Animate
-      const tick = () => {
-        if (dead) return;
-        frameRef.current = requestAnimationFrame(tick);
-        const o = orbitRef.current;
-        cam.position.set(
-          o.tx + o.dist * Math.sin(o.phi) * Math.sin(o.theta),
-          o.ty + o.dist * Math.cos(o.phi),
-          o.tz + o.dist * Math.sin(o.phi) * Math.cos(o.theta)
-        );
-        cam.lookAt(o.tx, o.ty, o.tz);
-        rend.render(scene, cam);
-      };
-      tick();
+  // Subtle grid
+  ctx.strokeStyle = '#161825';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i < w; i += 20) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); }
+  for (let i = 0; i < h; i += 20) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); }
 
-      const onResize = () => {
-        if (dead) return;
-        const w2 = el.clientWidth, h2 = el.clientHeight;
-        cam.aspect = w2/h2; cam.updateProjectionMatrix(); rend.setSize(w2, h2);
-      };
-      window.addEventListener('resize', onResize);
-      return () => window.removeEventListener('resize', onResize);
-    };
-    go();
-    return () => { dead = true; cancelAnimationFrame(frameRef.current);
-      if (stateRef.current.rend) { stateRef.current.rend.dispose(); try { mountRef.current?.removeChild(stateRef.current.rend.domElement); } catch(e){} }
-    };
-  }, []);
+  ctx.translate(panX, panY);
+  ctx.scale(zoom, zoom);
 
-  // ─── Update components ───
-  useEffect(() => {
-    const { THREE, compGrp } = stateRef.current;
-    if (!THREE || !compGrp) return;
-    while (compGrp.children.length) compGrp.remove(compGrp.children[0]);
+  // ─── Breadboard body ───
+  const bbX = PAD_X - 15, bbY = PAD_Y - 15;
+  const bbW = BB_W + 10, bbH2 = BB_H + 15;
+  
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(bbX + 4, bbY + 4, bbW, bbH2);
+  
+  // Board
+  ctx.fillStyle = '#f0ebe0';
+  ctx.strokeStyle = '#c8c0a8';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.roundRect(bbX, bbY, bbW, bbH2, 6);
+  ctx.fill();
+  ctx.stroke();
 
-    placed.forEach(comp => {
-      const def = COMP_DEFS.find(d => d.id === comp.type);
-      if (!def) return;
-      const x = (comp.col - BB_COLS/2 + 0.5) * HS;
-      const z = (comp.row - BB_ROWS/2 + 0.5) * HS;
-      const g = new THREE.Group();
-      const y0 = 0.12;
+  // Center channel
+  const chanY = PAD_Y + GAP * CELL - 2;
+  ctx.fillStyle = '#d5cdb8';
+  ctx.fillRect(bbX + 5, chanY, bbW - 10, CELL + 4);
 
-      if (comp.type === 'resistor') {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.55, 12), new THREE.MeshStandardMaterial({ color:0xc9935a, roughness:0.45 }));
-        body.rotation.z = Math.PI/2; body.position.y = 0.28; g.add(body);
-        [0x8B4513, 0x000000, 0xEA580C, 0xCFB53B].forEach((cl, i) => {
-          const b = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.025, 12), new THREE.MeshStandardMaterial({ color:cl }));
-          b.rotation.z = Math.PI/2; b.position.set(-0.12 + i*0.09, 0.28, 0); g.add(b);
-        });
-        [-0.4, 0.4].forEach(dx => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.28, 6), new THREE.MeshStandardMaterial({ color:0x888888, metalness:0.5 }));
-          l.position.set(dx, 0.14, 0); g.add(l);
-        });
-      } else if (comp.type.startsWith('led-')) {
-        const col = parseInt(def.color.replace('#',''), 16);
-        const dome = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12, 0, Math.PI*2, 0, Math.PI*0.55),
-          new THREE.MeshStandardMaterial({ color:col, transparent:true, opacity:0.85, emissive:col, emissiveIntensity:0.5 }));
-        dome.position.y = 0.42; g.add(dome);
-        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.1, 16),
-          new THREE.MeshStandardMaterial({ color:col, transparent:true, opacity:0.4 }));
-        base.position.y = 0.34; g.add(base);
-        const glow = new THREE.PointLight(col, 0.3, 1.5); glow.position.y = 0.5; g.add(glow);
-        [-0.04, 0.04].forEach((dx, i) => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, i===0?0.34:0.28, 6), new THREE.MeshStandardMaterial({ color:0x999999, metalness:0.6 }));
-          l.position.set(dx, i===0?0.17:0.14, 0); g.add(l);
-        });
-      } else if (comp.type === 'capacitor') {
-        const body = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.04), new THREE.MeshStandardMaterial({ color:0x2255cc, roughness:0.3 }));
-        body.position.y = 0.32; g.add(body);
-        [-0.04, 0.04].forEach(dx => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.22, 6), new THREE.MeshStandardMaterial({ color:0x888888 }));
-          l.position.set(dx, 0.11, 0); g.add(l);
-        });
-      } else if (comp.type === 'cap-elec') {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.4, 16), new THREE.MeshStandardMaterial({ color:0x111144, roughness:0.3 }));
-        body.position.y = 0.42; g.add(body);
-        const stripe = new THREE.Mesh(new THREE.CylinderGeometry(0.155, 0.155, 0.12, 16, 1, false, 0, Math.PI*0.35), new THREE.MeshStandardMaterial({ color:0x888888 }));
-        stripe.position.y = 0.48; g.add(stripe);
-        const top = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.02, 16), new THREE.MeshStandardMaterial({ color:0x222255 }));
-        top.position.y = 0.63; g.add(top);
-        [-0.05, 0.05].forEach(dx => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.22, 6), new THREE.MeshStandardMaterial({ color:0x888888 }));
-          l.position.set(dx, 0.11, 0); g.add(l);
-        });
-      } else if (comp.type === 'ic555' || comp.type === 'ic-opamp') {
-        const bw = comp.type === 'ic555' ? 0.45 : 0.35;
-        const bh = comp.type === 'ic555' ? 0.95 : 0.6;
-        const body = new THREE.Mesh(new THREE.BoxGeometry(bw, 0.15, bh), new THREE.MeshStandardMaterial({ color:0x111111, roughness:0.2 }));
-        body.position.y = 0.26; g.add(body);
-        const notch = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 8), new THREE.MeshStandardMaterial({ color:0x222222 }));
-        notch.position.set(0, 0.34, -bh/2 + 0.06); g.add(notch);
-        const pins = comp.type === 'ic555' ? 4 : 3;
-        for (let i = 0; i < pins; i++) {
-          [-bw/2-0.04, bw/2+0.04].forEach(dx => {
-            const pin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.015, 0.03), new THREE.MeshStandardMaterial({ color:0xaaaaaa, metalness:0.7 }));
-            pin.position.set(dx, 0.19, -bh/2 + 0.12 + i * (bh-0.24)/(pins-1));
-            g.add(pin);
-          });
-        }
-      } else if (comp.type === 'battery') {
-        const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.85, 0.28), new THREE.MeshStandardMaterial({ color:0x1a1a1a }));
-        body.position.y = 0.55; g.add(body);
-        const label = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.5, 0.005), new THREE.MeshStandardMaterial({ color:0x1a8a3a }));
-        label.position.set(0, 0.55, 0.145); g.add(label);
-        const tp = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.07, 8), new THREE.MeshStandardMaterial({ color:0xcccccc, metalness:0.8 }));
-        tp.position.set(-0.08, 1.0, 0); g.add(tp);
-        const tn = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 8), new THREE.MeshStandardMaterial({ color:0xcccccc, metalness:0.8 }));
-        tn.position.set(0.08, 0.99, 0); g.add(tn);
-      } else if (comp.type === 'button') {
-        const base = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.4), new THREE.MeshStandardMaterial({ color:0x1a1a1a }));
-        base.position.y = 0.24; g.add(base);
-        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.12, 0.1, 16), new THREE.MeshStandardMaterial({ color:0xdd3333, roughness:0.3 }));
-        cap.position.y = 0.36; g.add(cap);
-        [[-0.15,-0.15],[0.15,-0.15],[-0.15,0.15],[0.15,0.15]].forEach(([px,pz]) => {
-          const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 6), new THREE.MeshStandardMaterial({ color:0x888888 }));
-          pin.position.set(px, 0.09, pz); g.add(pin);
-        });
-      } else if (comp.type === 'diode' || comp.type === 'zener') {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.3, 12), new THREE.MeshStandardMaterial({ color:0x1a1a1a }));
-        body.rotation.z = Math.PI/2; body.position.y = 0.28; g.add(body);
-        const band = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.058, 0.03, 12), new THREE.MeshStandardMaterial({ color:0xcccccc }));
-        band.rotation.z = Math.PI/2; band.position.set(0.1, 0.28, 0); g.add(band);
-        [-0.3, 0.3].forEach(dx => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.28, 6), new THREE.MeshStandardMaterial({ color:0x888888 }));
-          l.position.set(dx, 0.14, 0); g.add(l);
-        });
-      } else if (comp.type === 'npn' || comp.type === 'pnp' || comp.type.startsWith('mosfet')) {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.06, 3), new THREE.MeshStandardMaterial({ color:0x1a1a1a }));
-        body.rotation.x = Math.PI/2; body.position.y = 0.35; g.add(body);
-        const flat = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.01), new THREE.MeshStandardMaterial({ color:0x111111 }));
-        flat.position.set(0, 0.35, 0.05); g.add(flat);
-        [-0.06, 0, 0.06].forEach(dx => {
-          const l = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.24, 6), new THREE.MeshStandardMaterial({ color:0x888888 }));
-          l.position.set(dx, 0.12, 0); g.add(l);
-        });
-      } else if (comp.type === 'buzzer') {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.15, 20), new THREE.MeshStandardMaterial({ color:0x111111 }));
-        body.position.y = 0.32; g.add(body);
-        const top = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.02, 12), new THREE.MeshStandardMaterial({ color:0x888888 }));
-        top.position.y = 0.4; g.add(top);
-      } else if (comp.type === 'motor-dc') {
-        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.45, 16), new THREE.MeshStandardMaterial({ color:0x666666, metalness:0.6 }));
-        body.rotation.x = Math.PI/2; body.position.y = 0.38; g.add(body);
-        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.2, 8), new THREE.MeshStandardMaterial({ color:0xcccccc, metalness:0.9 }));
-        shaft.rotation.x = Math.PI/2; shaft.position.set(0, 0.38, 0.32); g.add(shaft);
+  // Power rail lines
+  const drawRail = (y, color) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 4]);
+    ctx.beginPath();
+    ctx.moveTo(PAD_X, y);
+    ctx.lineTo(PAD_X + (COLS - 1) * CELL, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  drawRail(PAD_Y - 8, '#cc3333');
+  drawRail(PAD_Y + BB_H + 8, '#cc3333');
+
+  // Row labels
+  ctx.fillStyle = '#666';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'right';
+  const rowLabels = ['a','b','c','d','e','f','g','h','i','j'];
+  for (let r = 0; r < ROWS; r++) {
+    const { y } = holePos(0, r);
+    ctx.fillText(rowLabels[r], PAD_X - 20, y + 3);
+  }
+  // Col labels
+  ctx.textAlign = 'center';
+  for (let c = 0; c < COLS; c++) {
+    const { x } = holePos(c, 0);
+    ctx.fillText(String(c + 1), x, PAD_Y - 22);
+  }
+
+  // ─── Holes ───
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      const { x, y } = holePos(c, r);
+      const isHovered = hovered && hovered.col === c && hovered.row === r;
+      
+      ctx.beginPath();
+      ctx.arc(x, y, isHovered ? 4.5 : 3.5, 0, Math.PI * 2);
+      
+      if (isHovered) {
+        ctx.fillStyle = '#ff8c42';
+        ctx.shadowColor = '#ff8c42';
+        ctx.shadowBlur = 8;
       } else {
-        // Generic fallback
-        const col = parseInt((def?.color || '#ff8c42').replace('#',''), 16);
-        const body = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.2, 0.18), new THREE.MeshStandardMaterial({ color:col }));
-        body.position.y = 0.28; g.add(body);
+        ctx.fillStyle = '#2a2a2a';
+        ctx.shadowBlur = 0;
       }
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+  }
 
-      g.position.set(x, y0, z);
-      g.castShadow = true;
-      compGrp.add(g);
-    });
-  }, [placed]);
-
-  // ─── Update wires ───
-  useEffect(() => {
-    const { THREE, wireGrp } = stateRef.current;
-    if (!THREE || !wireGrp) return;
-    while (wireGrp.children.length) wireGrp.remove(wireGrp.children[0]);
-
-    const wireColors = [0x3b82f6, 0xef4444, 0x22c55e, 0xeab308, 0xf97316, 0xa855f7, 0xec4899, 0x06b6d4, 0xffffff, 0x6366f1];
+  // ─── Wires ───
+  const wireColors = ['#3b82f6','#ef4444','#22c55e','#eab308','#f97316','#a855f7','#ec4899','#06b6d4','#f43f5e','#8b5cf6'];
+  
+  wires.forEach((w, i) => {
+    const p1 = holePos(w.sc, w.sr);
+    const p2 = holePos(w.ec, w.er);
+    const color = wireColors[i % wireColors.length];
     
-    wires.forEach((w, i) => {
-      const x1 = (w.sc - BB_COLS/2 + 0.5) * HS;
-      const z1 = (w.sr - BB_ROWS/2 + 0.5) * HS;
-      const x2 = (w.ec - BB_COLS/2 + 0.5) * HS;
-      const z2 = (w.er - BB_ROWS/2 + 0.5) * HS;
-      const midY = 0.28 + Math.sqrt(Math.pow(x2-x1,2) + Math.pow(z2-z1,2)) * 0.15;
-
-      const pts = [
-        new THREE.Vector3(x1, 0.15, z1),
-        new THREE.Vector3(x1, midY, z1),
-        new THREE.Vector3((x1+x2)/2, midY + 0.05, (z1+z2)/2),
-        new THREE.Vector3(x2, midY, z2),
-        new THREE.Vector3(x2, 0.15, z2),
-      ];
-      const curve = new THREE.CatmullRomCurve3(pts);
-      const mesh = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 24, 0.018, 8, false),
-        new THREE.MeshStandardMaterial({ color: wireColors[i % wireColors.length], roughness:0.3, metalness:0.1 })
-      );
-      wireGrp.add(mesh);
+    // Wire shadow
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p1.x + 1, p1.y + 1);
+    ctx.lineTo(p2.x + 1, p2.y + 1);
+    ctx.stroke();
+    
+    // Wire
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    
+    // Endpoints
+    [p1, p2].forEach(p => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
     });
+  });
 
-    // Wire in progress (from wireStart to hovered)
-    if (wireStart && hovered) {
-      const x1 = (wireStart.col - BB_COLS/2 + 0.5) * HS;
-      const z1 = (wireStart.row - BB_ROWS/2 + 0.5) * HS;
-      const x2 = (hovered.col - BB_COLS/2 + 0.5) * HS;
-      const z2 = (hovered.row - BB_ROWS/2 + 0.5) * HS;
-      const pts = [new THREE.Vector3(x1, 0.15, z1), new THREE.Vector3(x1, 0.35, z1), new THREE.Vector3(x2, 0.35, z2), new THREE.Vector3(x2, 0.15, z2)];
-      const curve = new THREE.CatmullRomCurve3(pts);
-      const preview = new THREE.Mesh(
-        new THREE.TubeGeometry(curve, 16, 0.015, 6, false),
-        new THREE.MeshStandardMaterial({ color: 0xff8c42, transparent: true, opacity: 0.5 })
-      );
-      wireGrp.add(preview);
-    }
-  }, [wires, wireStart, hovered]);
+  // Wire preview
+  if (wireStart && hovered) {
+    const p1 = holePos(wireStart.col, wireStart.row);
+    const p2 = holePos(hovered.col, hovered.row);
+    ctx.strokeStyle = 'rgba(255,140,66,0.5)';
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
-  // ─── Highlight hovered hole ───
-  useEffect(() => {
-    const { THREE } = stateRef.current;
-    if (!THREE) return;
-    stateRef.current.holes.forEach(h => {
-      const vis = h.userData.visMesh;
-      if (hovered && h.userData.col === hovered.col && h.userData.row === hovered.row) {
-        vis.material.color.setHex(0xff8c42);
-        vis.material.emissive = new THREE.Color(0xff8c42);
-        vis.material.emissiveIntensity = 0.6;
-      } else {
-        vis.material.color.setHex(0x2a2a2a);
-        vis.material.emissive = new THREE.Color(0x000000);
-        vis.material.emissiveIntensity = 0;
+  // ─── Components ───
+  components.forEach((comp, idx) => {
+    const def = COMP_DEFS[comp.type];
+    if (!def) return;
+    
+    const ledState = simResult?.ledStates?.[idx];
+    const isPowered = simRunning && ledState?.powered;
+    const brightness = ledState?.brightness || 0;
+
+    // Pin positions
+    const pinPositions = def.pins.map(p => holePos(comp.col + p.dx, comp.row + p.dy));
+
+    // Draw based on type
+    if (comp.type.startsWith('resistor')) {
+      // Resistor: body between pins with color bands
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      
+      // Leads
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx - 15 * Math.cos(angle), my - 15 * Math.sin(angle)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx + 15 * Math.cos(angle), my + 15 * Math.sin(angle)); ctx.stroke();
+      
+      // Body
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#c9935a';
+      ctx.strokeStyle = '#a07838';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(-15, -5, 30, 10, 3); ctx.fill(); ctx.stroke();
+      
+      // Color bands
+      const bandColors = ['#8B4513','#000','#EA580C','#CFB53B'];
+      bandColors.forEach((c, i) => {
+        ctx.fillStyle = c;
+        ctx.fillRect(-10 + i * 6, -5, 3, 10);
+      });
+      ctx.restore();
+      
+    } else if (comp.type.startsWith('led-')) {
+      // LED with glow when powered
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const color = def.color;
+      
+      // Leads
+      ctx.strokeStyle = '#999';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx - 4, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx + 4, my); ctx.stroke();
+      
+      // LED glow (when simulating)
+      if (isPowered && brightness > 0) {
+        const glowRadius = 15 + brightness * 20;
+        const gradient = ctx.createRadialGradient(mx, my, 0, mx, my, glowRadius);
+        gradient.addColorStop(0, color + 'aa');
+        gradient.addColorStop(0.3, color + '44');
+        gradient.addColorStop(1, color + '00');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(mx, my, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
       }
-    });
-  }, [hovered]);
-
-  // ─── Input handlers ───
-  const raycast = useCallback((cx, cy) => {
-    const { THREE, rend, cam } = stateRef.current;
-    if (!THREE || !rend) return null;
-    const rect = rend.domElement.getBoundingClientRect();
-    const mouse = new THREE.Vector2(((cx-rect.left)/rect.width)*2-1, -((cy-rect.top)/rect.height)*2+1);
-    const ray = new THREE.Raycaster();
-    ray.setFromCamera(mouse, cam);
-    const hits = ray.intersectObjects(stateRef.current.holes);
-    return hits.length > 0 ? hits[0].object.userData : null;
-  }, []);
-
-  const onDown = (e) => { dragRef.current = { on:true, btn:e.button, lx:e.clientX, ly:e.clientY, moved:false }; };
-  const onMove = (e) => {
-    const d = dragRef.current;
-    if (d.on) {
-      const dx = e.clientX - d.lx, dy = e.clientY - d.ly;
-      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) d.moved = true;
-      const o = orbitRef.current;
-      if (d.btn === 0 && !(tool || wireMode)) {
-        o.theta -= dx * 0.005;
-        o.phi = Math.max(0.15, Math.min(1.45, o.phi + dy * 0.005));
-      } else if (d.btn === 2 || d.btn === 1) {
-        o.tx -= dx * 0.008; o.tz -= dy * 0.008;
-      }
-      d.lx = e.clientX; d.ly = e.clientY;
+      
+      // LED body (triangle + line)
+      ctx.fillStyle = isPowered && brightness > 0 ? color : color + '88';
+      ctx.beginPath();
+      ctx.moveTo(mx - 5, my - 6);
+      ctx.lineTo(mx - 5, my + 6);
+      ctx.lineTo(mx + 5, my);
+      ctx.closePath();
+      ctx.fill();
+      
+      // Cathode line
+      ctx.strokeStyle = isPowered ? color : '#666';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(mx + 5, my - 6); ctx.lineTo(mx + 5, my + 6); ctx.stroke();
+      
+      // Polarity marker
+      ctx.fillStyle = '#666';
+      ctx.font = '7px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('+', p1.x, p1.y - 7);
+      ctx.fillText('−', p2.x, p2.y - 7);
+      
+    } else if (comp.type === 'capacitor') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      // Leads
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx - 3, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx + 3, my); ctx.stroke();
+      // Plates
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(mx - 3, my - 7); ctx.lineTo(mx - 3, my + 7); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(mx + 3, my - 7); ctx.lineTo(mx + 3, my + 7); ctx.stroke();
+      
+    } else if (comp.type === 'cap-elec') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx - 3, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx + 3, my); ctx.stroke();
+      // Cylinder body
+      ctx.fillStyle = '#1a1a4a';
+      ctx.beginPath(); ctx.arc(mx, my, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 0.5;
+      ctx.beginPath(); ctx.arc(mx, my, 8, -0.5, 0.5); ctx.stroke();
+      // + marker
+      ctx.fillStyle = '#aaa';
+      ctx.font = '8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('+', p1.x, p1.y - 7);
+      
+    } else if (comp.type === 'diode') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+      ctx.save();
+      ctx.translate(mx, my);
+      ctx.rotate(angle);
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath(); ctx.roundRect(-10, -4, 20, 8, 2); ctx.fill();
+      ctx.fillStyle = '#ccc';
+      ctx.fillRect(6, -4, 3, 8);
+      ctx.restore();
+      
+    } else if (comp.type === 'npn' || comp.type === 'mosfet-n') {
+      const p = pinPositions[1] || pinPositions[0]; // center pin
+      ctx.fillStyle = '#1a1a1a';
+      ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#aaa';
+      ctx.font = '6px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(comp.type === 'npn' ? 'NPN' : 'FET', p.x, p.y + 2);
+      // Leads
+      pinPositions.forEach((pp, i) => {
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pp.x, pp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+        ctx.fillStyle = '#666';
+        ctx.font = '6px monospace';
+        ctx.fillText(def.pinLabels?.[i] || '', pp.x, pp.y - 6);
+      });
+      
+    } else if (comp.type === 'ic555') {
+      const p0 = pinPositions[0];
+      const px = p0.x - 2, py = p0.y - 2;
+      const icW = 3 * CELL + 4, icH = 6 * CELL + 4;
+      // IC body
+      ctx.fillStyle = '#111';
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(px, py, icW, icH, 2); ctx.fill(); ctx.stroke();
+      // Notch
+      ctx.beginPath(); ctx.arc(px + icW / 2, py + 1, 3, 0, Math.PI); ctx.stroke();
+      // Label
+      ctx.fillStyle = '#888';
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('555', px + icW / 2, py + icH / 2 + 3);
+      // Pin labels
+      pinPositions.forEach((pp, i) => {
+        ctx.fillStyle = '#aaa';
+        ctx.beginPath(); ctx.arc(pp.x, pp.y, 2.5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#666';
+        ctx.font = '5px monospace';
+        ctx.textAlign = i < 4 ? 'right' : 'left';
+        const labelX = i < 4 ? pp.x - 6 : pp.x + 6;
+        ctx.fillText(def.pinLabels?.[i] || '', labelX, pp.y + 2);
+      });
+      
+    } else if (comp.type === 'battery' || comp.type === 'dc5v') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      // Battery symbol
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx - 4, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx + 4, my); ctx.stroke();
+      // Long line (+)
+      ctx.strokeStyle = comp.type === 'battery' ? '#22aa44' : '#ff8c42';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(mx - 4, my - 10); ctx.lineTo(mx - 4, my + 10); ctx.stroke();
+      // Short line (-)
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(mx + 4, my - 6); ctx.lineTo(mx + 4, my + 6); ctx.stroke();
+      // Labels
+      ctx.fillStyle = '#aaa';
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('+', p1.x, p1.y - 7);
+      ctx.fillText('−', p2.x, p2.y - 7);
+      ctx.fillText(comp.value, mx, my - 14);
+      
+    } else if (comp.type === 'button') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx, my - 8); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx, my + 8); ctx.stroke();
+      // Button body
+      ctx.fillStyle = '#222';
+      ctx.beginPath(); ctx.roundRect(mx - 8, my - 8, 16, 16, 3); ctx.fill();
+      ctx.fillStyle = '#cc3333';
+      ctx.beginPath(); ctx.arc(mx, my, 4, 0, Math.PI * 2); ctx.fill();
+      
+    } else if (comp.type === 'buzzer') {
+      const p1 = pinPositions[0], p2 = pinPositions[1];
+      const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+      ctx.strokeStyle = '#888';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(mx, my); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p2.x, p2.y); ctx.lineTo(mx, my); ctx.stroke();
+      ctx.fillStyle = '#111';
+      ctx.beginPath(); ctx.arc(mx, my, 9, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#444';
+      ctx.beginPath(); ctx.arc(mx, my, 3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#888';
+      ctx.font = '6px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('♪', mx, my - 12);
+      
+    } else {
+      // Generic component
+      const p1 = pinPositions[0];
+      const pLast = pinPositions[pinPositions.length - 1];
+      const mx = (p1.x + pLast.x) / 2, my = (p1.y + pLast.y) / 2;
+      ctx.fillStyle = def.color + '44';
+      ctx.strokeStyle = def.color;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.roundRect(mx - 10, my - 8, 20, 16, 3); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = def.color;
+      ctx.font = '7px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(def.symbol || def.name.slice(0, 3), mx, my + 3);
+      pinPositions.forEach(pp => {
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(pp.x, pp.y); ctx.lineTo(mx, my); ctx.stroke();
+      });
     }
-    onHover(raycast(e.clientX, e.clientY));
-  };
-  const onUp = (e) => {
-    if (!dragRef.current.moved && (tool || wireMode)) {
-      const h = raycast(e.clientX, e.clientY);
-      if (h) onClickHole(h.col, h.row);
+
+    // Component value label
+    ctx.fillStyle = '#888';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'center';
+    const labelPos = pinPositions[0];
+    if (!comp.type.startsWith('battery') && !comp.type.startsWith('dc')) {
+      ctx.fillText(comp.value, labelPos.x, labelPos.y + CELL + 5);
     }
-    dragRef.current.on = false;
-  };
-  const onWheel = (e) => { e.preventDefault(); orbitRef.current.dist = Math.max(3, Math.min(25, orbitRef.current.dist + e.deltaY * 0.008)); };
+  });
 
-  return <div ref={mountRef} className="w-full" style={{ height:'480px' }}
-    onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
-    onWheel={onWheel} onContextMenu={e => e.preventDefault()} />;
+  ctx.restore();
 }
 
-// ─── Simulation Panel ───
-function SimPanel({ results }) {
-  if (!results) return null;
-  const scoreColor = results.score >= 80 ? '#22c55e' : results.score >= 50 ? '#f59e0b' : '#ef4444';
-  const scoreLabel = results.score >= 80 ? 'Good' : results.score >= 50 ? 'Issues Found' : 'Problems Detected';
-
-  return (
-    <div className="rounded-2xl border p-3 space-y-2" style={{ background:'var(--sc-surface)', borderColor:'var(--sc-border)' }}>
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color:'var(--sc-dim)' }}>⚡ Circuit Analysis</h3>
-        <div className="flex items-center gap-2">
-          <div className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: scoreColor + '22', color: scoreColor }}>
-            {results.score}/100 — {scoreLabel}
-          </div>
-        </div>
-      </div>
-
-      {/* Score bar */}
-      <div className="h-1.5 rounded-full overflow-hidden" style={{ background:'var(--sc-surface2)' }}>
-        <div className="h-full rounded-full transition-all duration-500" style={{ width:`${results.score}%`, background: scoreColor }} />
-      </div>
-
-      <div className="space-y-1 max-h-[200px] overflow-auto">
-        {results.errors.map((e, i) => (
-          <div key={'e'+i} className="flex gap-2 p-2 rounded-lg text-[11px]" style={{ background:'rgba(239,68,68,0.08)', border:'1px solid rgba(239,68,68,0.2)' }}>
-            <span>🔴</span>
-            <span style={{ color:'#fca5a5' }}>{e.msg}</span>
-          </div>
-        ))}
-        {results.warnings.map((w, i) => (
-          <div key={'w'+i} className="flex gap-2 p-2 rounded-lg text-[11px]" style={{ background:'rgba(245,158,11,0.08)', border:'1px solid rgba(245,158,11,0.2)' }}>
-            <span>🟡</span>
-            <span style={{ color:'#fcd34d' }}>{w.msg}</span>
-          </div>
-        ))}
-        {results.info.map((inf, i) => (
-          <div key={'i'+i} className="flex gap-2 p-2 rounded-lg text-[11px]" style={{ background:'rgba(59,130,246,0.06)', border:'1px solid rgba(59,130,246,0.15)' }}>
-            <span>💡</span>
-            <span style={{ color:'var(--sc-dim)' }}>{inf.msg}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Palette ───
-function Palette({ tool, setTool, wireMode, setWireMode }) {
-  const [cat, setCat] = useState('passive');
-  return (
-    <div className="rounded-2xl border p-3" style={{ background:'var(--sc-surface)', borderColor:'var(--sc-border)' }}>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color:'var(--sc-dim)' }}>Components</h3>
-        <button onClick={() => { setWireMode(!wireMode); setTool(null); }}
-          className="px-2 py-1 rounded text-[10px] font-bold cursor-pointer border"
-          style={{ background: wireMode ? 'rgba(59,130,246,0.15)' : 'var(--sc-surface2)', borderColor: wireMode ? '#3b82f6' : 'var(--sc-border)', color: wireMode ? '#3b82f6' : 'var(--sc-dim)' }}>
-          {wireMode ? '🔗 Wire ON' : '🔗 Wire'}
-        </button>
-      </div>
-      <div className="flex gap-1 mb-2 flex-wrap">
-        {CATS.map(c => (
-          <button key={c.id} onClick={() => setCat(c.id)}
-            className="px-1.5 py-0.5 rounded text-[9px] font-semibold cursor-pointer border"
-            style={{ background: cat===c.id ? 'color-mix(in srgb, var(--sc-accent) 10%, transparent)' : 'var(--sc-surface2)', borderColor: cat===c.id ? 'var(--sc-accent)' : 'var(--sc-border)', color: cat===c.id ? 'var(--sc-accent)' : 'var(--sc-dim)' }}>
-            {c.name}
-          </button>
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-1 max-h-[200px] overflow-auto">
-        {COMP_DEFS.filter(c => c.cat === cat).map(comp => (
-          <button key={comp.id} onClick={() => { setTool(tool===comp.id ? null : comp.id); setWireMode(false); }}
-            className="flex items-center gap-1 p-1.5 rounded-lg text-left cursor-pointer border"
-            style={{ background: tool===comp.id ? 'color-mix(in srgb, var(--sc-accent) 10%, transparent)' : 'var(--sc-surface2)', borderColor: tool===comp.id ? 'var(--sc-accent)' : 'var(--sc-border)' }}>
-            <span className="text-[10px] w-4 text-center" style={{ color:comp.color }}>{comp.icon}</span>
-            <div className="min-w-0">
-              <div className="text-[9px] font-semibold truncate" style={{ color:'var(--sc-text)' }}>{comp.name}</div>
-              <div className="text-[8px] truncate" style={{ color:'var(--sc-dim)' }}>{comp.val}</div>
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ─── Parts List ───
-function PartsList({ placed, wires, onRemove, onRemoveWire, onUpdateVal, onClear }) {
-  return (
-    <div className="rounded-2xl border p-3" style={{ background:'var(--sc-surface)', borderColor:'var(--sc-border)' }}>
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color:'var(--sc-dim)' }}>BOM ({placed.length} parts, {wires.length} wires)</h3>
-        {(placed.length > 0 || wires.length > 0) && <button onClick={onClear} className="text-[9px] cursor-pointer" style={{ color:'var(--sc-accent)' }}>Clear</button>}
-      </div>
-      {placed.length === 0 ? (
-        <p className="text-[10px] text-center py-3" style={{ color:'var(--sc-dim)' }}>Select a component and click a hole on the breadboard.</p>
-      ) : (
-        <div className="space-y-1 max-h-[150px] overflow-auto">
-          {placed.map((c, i) => {
-            const d = COMP_DEFS.find(x => x.id === c.type);
-            return (
-              <div key={i} className="flex items-center gap-1.5 p-1 rounded border" style={{ background:'var(--sc-surface2)', borderColor:'var(--sc-border)' }}>
-                <span className="text-[9px]" style={{ color:d?.color }}>{d?.icon}</span>
-                <span className="text-[9px] font-semibold flex-1 truncate" style={{ color:'var(--sc-text)' }}>{d?.name}</span>
-                <input type="text" value={c.value} onChange={e => onUpdateVal(i, e.target.value)}
-                  className="text-[8px] bg-transparent border-none outline-none w-16 font-mono" style={{ color:'var(--sc-accent)' }} />
-                <button onClick={() => onRemove(i)} className="text-[9px] cursor-pointer opacity-40 hover:opacity-100">✕</button>
-              </div>
-            );
-          })}
-          {wires.map((w, i) => (
-            <div key={'w'+i} className="flex items-center gap-1.5 p-1 rounded border" style={{ background:'var(--sc-surface2)', borderColor:'var(--sc-border)' }}>
-              <span className="text-[9px]">🔗</span>
-              <span className="text-[8px] font-mono flex-1" style={{ color:'var(--sc-dim)' }}>({w.sc},{w.sr})→({w.ec},{w.er})</span>
-              <button onClick={() => onRemoveWire(i)} className="text-[9px] cursor-pointer opacity-40 hover:opacity-100">✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Status Bar ───
-function Status({ tool, wireMode, wireStart, hovered }) {
-  let msg = '🖱️ Left-drag: orbit · Scroll: zoom · Right-drag: pan';
-  if (tool) { const d = COMP_DEFS.find(x => x.id === tool); msg = `📌 Click hole to place ${d?.name}. Click again in palette to deselect.`; }
-  if (wireMode) msg = wireStart ? `🔗 Click second hole to finish wire (from ${wireStart.col},${wireStart.row})` : '🔗 Click first hole to start wire';
-  return (
-    <div className="flex items-center justify-between px-3 py-1 text-[9px]" style={{ background:'var(--sc-surface)', color:'var(--sc-dim)', borderTop:'1px solid var(--sc-border)' }}>
-      <span>{msg}</span>
-      {hovered && <span className="font-mono" style={{ color:'var(--sc-accent)' }}>Hole: {hovered.col},{hovered.row}</span>}
-    </div>
-  );
-}
-
-// ─── Main ───
+// ─── Main Component ───
 export default function CircuitPrototyper() {
   const { lang } = useLanguage();
+  const canvasRef = useRef(null);
+  const containerRef = useRef(null);
   const [tool, setTool] = useState(null);
   const [wireMode, setWireMode] = useState(false);
   const [wireStart, setWireStart] = useState(null);
   const [placed, setPlaced] = useState([]);
   const [wires, setWires] = useState([]);
   const [hovered, setHovered] = useState(null);
-  const [simResults, setSimResults] = useState(null);
+  const [simResult, setSimResult] = useState(null);
+  const [simRunning, setSimRunning] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [cat, setCat] = useState('passive');
+  const zoomRef = useRef(2.2);
+  const panRef = useRef({ x: 0, y: 0 });
+  const dragRef = useRef({ on: false, lx: 0, ly: 0, moved: false, btn: -1 });
 
-  // Run simulation whenever circuit changes
+  // Run simulation
   useEffect(() => {
-    const results = analyzeCircuit(placed, wires);
-    setSimResults(results);
+    const r = simulate(placed, wires);
+    setSimResult(r);
+  }, [placed, wires, simRunning]);
+
+  // Render loop
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let raf;
+    const render = () => {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width * devicePixelRatio;
+      canvas.height = rect.height * devicePixelRatio;
+      canvas.style.width = rect.width + 'px';
+      canvas.style.height = rect.height + 'px';
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+      drawScene(ctx, rect.width, rect.height, zoomRef.current, panRef.current.x, panRef.current.y,
+        placed, wires, hovered, simResult, tool, wireStart, simRunning);
+      raf = requestAnimationFrame(render);
+    };
+    render();
+    return () => cancelAnimationFrame(raf);
+  }, [placed, wires, hovered, simResult, tool, wireStart, simRunning]);
+
+  // ─── Input Handlers ───
+  const getHole = useCallback((e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+    return hitTest(px, py, zoomRef.current, panRef.current.x, panRef.current.y);
+  }, []);
+
+  const onPointerDown = (e) => {
+    dragRef.current = { on: true, lx: e.clientX, ly: e.clientY, moved: false, btn: e.button };
+    e.preventDefault();
+  };
+
+  const onPointerMove = (e) => {
+    const d = dragRef.current;
+    if (d.on) {
+      const dx = e.clientX - d.lx, dy = e.clientY - d.ly;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) d.moved = true;
+      if ((d.btn === 1 || d.btn === 2) || (d.btn === 0 && !tool && !wireMode)) {
+        panRef.current.x += dx;
+        panRef.current.y += dy;
+      }
+      d.lx = e.clientX;
+      d.ly = e.clientY;
+    }
+    setHovered(getHole(e));
+  };
+
+  const onPointerUp = (e) => {
+    if (!dragRef.current.moved) {
+      const hole = getHole(e);
+      if (hole) {
+        if (wireMode) {
+          if (!wireStart) { setWireStart(hole); }
+          else {
+            if (wireStart.col !== hole.col || wireStart.row !== hole.row) {
+              setWires(p => [...p, { sc: wireStart.col, sr: wireStart.row, ec: hole.col, er: hole.row }]);
+            }
+            setWireStart(null);
+          }
+        } else if (tool) {
+          const def = COMP_DEFS[tool];
+          // Check if pins fit on board
+          const fits = def.pins.every(p => hole.col + p.dx >= 0 && hole.col + p.dx < COLS && hole.row + p.dy >= 0 && hole.row + p.dy < ROWS);
+          if (fits) {
+            setPlaced(p => [...p, { type: tool, col: hole.col, row: hole.row, value: def.defaultVal }]);
+          }
+        }
+      }
+    }
+    dragRef.current.on = false;
+  };
+
+  const onWheel = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    zoomRef.current = Math.max(0.8, Math.min(5, zoomRef.current * delta));
+  }, []);
+
+  // Prevent page scroll on canvas
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handler = (e) => { e.preventDefault(); };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === 'Escape') { setTool(null); setWireMode(false); setWireStart(null); }
+      if (e.key === 'w' || e.key === 'W') { setWireMode(m => !m); setTool(null); }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (placed.length > 0) setPlaced(p => p.slice(0, -1));
+        else if (wires.length > 0) setWires(w => w.slice(0, -1));
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
   }, [placed, wires]);
 
-  const onClickHole = useCallback((col, row) => {
-    if (wireMode) {
-      if (!wireStart) { setWireStart({ col, row }); }
-      else {
-        if (wireStart.col !== col || wireStart.row !== row) {
-          setWires(p => [...p, { sc:wireStart.col, sr:wireStart.row, ec:col, er:row }]);
-        }
-        setWireStart(null);
-      }
-    } else if (tool) {
-      const def = COMP_DEFS.find(d => d.id === tool);
-      setPlaced(p => [...p, { type: tool, col, row, value: def?.val || '' }]);
+  const toggleFullscreen = () => {
+    if (!fullscreen) {
+      containerRef.current?.requestFullscreen?.();
+    } else {
+      document.exitFullscreen?.();
     }
-  }, [tool, wireMode, wireStart]);
+    setFullscreen(!fullscreen);
+  };
+
+  // Listen for fullscreen change
+  useEffect(() => {
+    const handler = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const filtered = Object.entries(COMP_DEFS).filter(([_, d]) => d.cat === cat);
+  const scoreColor = !simResult ? '#666' : simResult.score >= 80 ? '#22c55e' : simResult.score >= 50 ? '#f59e0b' : '#ef4444';
 
   const ctx = {
-    components: placed.map(c => ({ type: COMP_DEFS.find(d => d.id === c.type)?.name, value: c.value, pos: `${c.col},${c.row}` })),
-    wires: wires.map(w => `(${w.sc},${w.sr})→(${w.ec},${w.er})`),
-    analysis: simResults ? { score: simResults.score, errors: simResults.errors.length, warnings: simResults.warnings.length } : null,
+    components: placed.map(c => ({ type: COMP_DEFS[c.type]?.name, value: c.value, pos: `col:${c.col} row:${c.row}` })),
+    wires: wires.length,
+    simulation: simResult ? { score: simResult.score, errors: simResult.errors.length, warnings: simResult.warnings.length } : null,
   };
 
   return (
     <div className="space-y-3">
-      <div className="rounded-2xl border overflow-hidden" style={{ borderColor:'var(--sc-border)' }}>
-        <Scene3D placed={placed} wires={wires} tool={wireMode ? null : tool} wireMode={wireMode}
-          wireStart={wireStart} onClickHole={onClickHole} onHover={setHovered} hovered={hovered} />
-        <Status tool={tool} wireMode={wireMode} wireStart={wireStart} hovered={hovered} />
+      {/* Canvas + toolbar */}
+      <div ref={containerRef} className="rounded-2xl border overflow-hidden" style={{ borderColor: 'var(--sc-border)', background: '#0e1018' }}>
+        {/* Toolbar */}
+        <div className="flex items-center justify-between px-3 py-2 border-b" style={{ background: 'var(--sc-surface)', borderColor: 'var(--sc-border)' }}>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setSimRunning(!simRunning)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer border transition-all"
+              style={{
+                background: simRunning ? 'rgba(34,197,94,0.15)' : 'var(--sc-surface2)',
+                borderColor: simRunning ? '#22c55e' : 'var(--sc-border)',
+                color: simRunning ? '#22c55e' : 'var(--sc-dim)',
+              }}>
+              {simRunning ? '⏹ Stop Simulation' : '▶ Start Simulation'}
+            </button>
+            <button onClick={() => { setWireMode(!wireMode); setTool(null); setWireStart(null); }}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer border"
+              style={{
+                background: wireMode ? 'rgba(59,130,246,0.15)' : 'var(--sc-surface2)',
+                borderColor: wireMode ? '#3b82f6' : 'var(--sc-border)',
+                color: wireMode ? '#3b82f6' : 'var(--sc-dim)',
+              }}>
+              {wireMode ? '🔗 Wire Mode ON' : '🔗 Wire (W)'}
+            </button>
+            <span className="text-[9px] font-mono" style={{ color: 'var(--sc-dim)' }}>
+              ESC: deselect · DEL: undo · W: wire toggle
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {simResult && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: scoreColor + '22', color: scoreColor }}>
+                Score: {simResult.score}/100
+              </span>
+            )}
+            <button onClick={toggleFullscreen} className="px-2 py-1 rounded text-xs cursor-pointer border"
+              style={{ background: 'var(--sc-surface2)', borderColor: 'var(--sc-border)', color: 'var(--sc-dim)' }}>
+              {fullscreen ? '⊡ Exit' : '⛶ Fullscreen'}
+            </button>
+          </div>
+        </div>
+
+        {/* Canvas */}
+        <div style={{ height: fullscreen ? 'calc(100vh - 80px)' : '450px', cursor: tool || wireMode ? 'crosshair' : 'grab' }}
+          onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}
+          onContextMenu={e => e.preventDefault()}>
+          <canvas ref={canvasRef} className="w-full h-full" />
+        </div>
+
+        {/* Status bar */}
+        <div className="flex items-center justify-between px-3 py-1 text-[9px] border-t" style={{ background: 'var(--sc-surface)', borderColor: 'var(--sc-border)', color: 'var(--sc-dim)' }}>
+          <span>
+            {tool ? `📌 Placing: ${COMP_DEFS[tool]?.name} — click hole` :
+             wireMode ? (wireStart ? `🔗 Click second hole (from ${wireStart.col},${wireStart.row})` : '🔗 Click first hole') :
+             '🖱️ Drag: pan · Scroll: zoom · Click: select tool first'}
+          </span>
+          <span className="font-mono">
+            {hovered ? `Hole: ${String.fromCharCode(97 + hovered.row)}${hovered.col + 1}` : ''}
+            {' · '}{placed.length} parts · {wires.length} wires
+          </span>
+        </div>
       </div>
 
-      {/* Simulation Results */}
-      <SimPanel results={simResults} />
-
-      <div className="flex gap-3 flex-wrap">
-        <div className="flex-1 min-w-[250px] space-y-3">
-          <Palette tool={tool} setTool={setTool} wireMode={wireMode} setWireMode={setWireMode} />
-          <PartsList placed={placed} wires={wires}
-            onRemove={i => setPlaced(p => p.filter((_,idx) => idx !== i))}
-            onRemoveWire={i => setWires(p => p.filter((_,idx) => idx !== i))}
-            onUpdateVal={(i,v) => setPlaced(p => p.map((c,idx) => idx===i ? {...c, value:v} : c))}
-            onClear={() => { setPlaced([]); setWires([]); }} />
+      {/* Simulation errors/warnings */}
+      {simResult && (simResult.errors.length > 0 || simResult.warnings.length > 0 || simResult.info.length > 0) && (
+        <div className="rounded-2xl border p-3 space-y-1.5" style={{ background: 'var(--sc-surface)', borderColor: 'var(--sc-border)' }}>
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--sc-dim)' }}>⚡ Circuit Analysis</h3>
+            <div className="h-1.5 flex-1 mx-4 rounded-full overflow-hidden" style={{ background: 'var(--sc-surface2)' }}>
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${simResult.score}%`, background: scoreColor }} />
+            </div>
+          </div>
+          <div className="space-y-1 max-h-[150px] overflow-auto text-[11px]">
+            {simResult.errors.map((e, i) => <div key={'e' + i} className="p-1.5 rounded" style={{ background: 'rgba(239,68,68,0.08)', color: '#fca5a5' }}>{e}</div>)}
+            {simResult.warnings.map((w, i) => <div key={'w' + i} className="p-1.5 rounded" style={{ background: 'rgba(245,158,11,0.06)', color: '#fcd34d' }}>{w}</div>)}
+            {simResult.info.map((inf, i) => <div key={'i' + i} className="p-1.5 rounded" style={{ background: 'rgba(59,130,246,0.05)', color: 'var(--sc-dim)' }}>{inf}</div>)}
+          </div>
         </div>
+      )}
+
+      {/* Bottom panels */}
+      <div className="flex gap-3 flex-wrap">
+        {/* Component palette */}
+        <div className="flex-1 min-w-[250px] space-y-3">
+          <div className="rounded-2xl border p-3" style={{ background: 'var(--sc-surface)', borderColor: 'var(--sc-border)' }}>
+            <h3 className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--sc-dim)' }}>Components</h3>
+            <div className="flex gap-1 mb-2 flex-wrap">
+              {CATEGORIES.map(c => (
+                <button key={c.id} onClick={() => setCat(c.id)}
+                  className="px-1.5 py-0.5 rounded text-[9px] font-semibold cursor-pointer border"
+                  style={{
+                    background: cat === c.id ? 'color-mix(in srgb, var(--sc-accent) 10%, transparent)' : 'var(--sc-surface2)',
+                    borderColor: cat === c.id ? 'var(--sc-accent)' : 'var(--sc-border)',
+                    color: cat === c.id ? 'var(--sc-accent)' : 'var(--sc-dim)',
+                  }}>
+                  {c.icon} {c.name}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-1 max-h-[180px] overflow-auto">
+              {filtered.map(([id, def]) => (
+                <button key={id} onClick={() => { setTool(tool === id ? null : id); setWireMode(false); setWireStart(null); }}
+                  className="flex items-center gap-1.5 p-1.5 rounded-lg text-left cursor-pointer border"
+                  style={{
+                    background: tool === id ? 'color-mix(in srgb, var(--sc-accent) 10%, transparent)' : 'var(--sc-surface2)',
+                    borderColor: tool === id ? 'var(--sc-accent)' : 'var(--sc-border)',
+                  }}>
+                  <div className="w-3 h-3 rounded-sm" style={{ background: def.color }} />
+                  <div className="min-w-0">
+                    <div className="text-[9px] font-semibold truncate" style={{ color: 'var(--sc-text)' }}>{def.name}</div>
+                    <div className="text-[7px] truncate" style={{ color: 'var(--sc-dim)' }}>{def.defaultVal}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* BOM */}
+          <div className="rounded-2xl border p-3" style={{ background: 'var(--sc-surface)', borderColor: 'var(--sc-border)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: 'var(--sc-dim)' }}>BOM ({placed.length})</h3>
+              {placed.length > 0 && <button onClick={() => { setPlaced([]); setWires([]); }} className="text-[9px] cursor-pointer" style={{ color: 'var(--sc-accent)' }}>Clear</button>}
+            </div>
+            <div className="space-y-1 max-h-[120px] overflow-auto">
+              {placed.map((c, i) => {
+                const d = COMP_DEFS[c.type];
+                return (
+                  <div key={i} className="flex items-center gap-1 p-1 rounded border text-[9px]" style={{ background: 'var(--sc-surface2)', borderColor: 'var(--sc-border)' }}>
+                    <div className="w-2 h-2 rounded-sm" style={{ background: d?.color }} />
+                    <span className="flex-1 truncate font-semibold" style={{ color: 'var(--sc-text)' }}>{d?.name}</span>
+                    <input type="text" value={c.value} onChange={e => setPlaced(p => p.map((x, j) => j === i ? { ...x, value: e.target.value } : x))}
+                      className="w-14 bg-transparent border-none outline-none text-right font-mono text-[8px]" style={{ color: 'var(--sc-accent)' }} />
+                    <button onClick={() => setPlaced(p => p.filter((_, j) => j !== i))} className="opacity-40 hover:opacity-100 cursor-pointer">✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* AI Panel */}
         <div className="flex-1 min-w-[300px]">
           <AIPanel context={ctx} toolId="prototyper" />
         </div>
