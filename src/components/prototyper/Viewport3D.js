@@ -18,6 +18,39 @@ export default function Viewport3D({
 }) {
   const hostRef = useRef(null);
   const threeRef = useRef(null);
+  const wireDraftRef = useRef(null); // {from:{col,row}}
+  const dragRef = useRef({ dragging: false, compId: null, startCircuit: null, moved: false });
+  const latestRef = useRef({
+    defs,
+    circuit,
+    commit,
+    setCircuit,
+    mode,
+    placingType,
+    simRunning,
+    sim,
+    selected,
+    setSelected,
+    hovered,
+    setHovered,
+  });
+
+  useEffect(() => {
+    latestRef.current = {
+      defs,
+      circuit,
+      commit,
+      setCircuit,
+      mode,
+      placingType,
+      simRunning,
+      sim,
+      selected,
+      setSelected,
+      hovered,
+      setHovered,
+    };
+  }, [defs, circuit, commit, mode, placingType, simRunning, sim, selected, setSelected, hovered, setHovered]);
 
   const isInteractive = !simRunning;
 
@@ -50,9 +83,24 @@ export default function Viewport3D({
       scene.background = new THREE.Color(getCssVar('--sc-bg', '#0a0b10'));
 
       // Camera
-      const camera = new THREE.PerspectiveCamera(45, host.clientWidth / host.clientHeight, 0.1, 200);
-      camera.position.set(0, 8, 10);
-      camera.lookAt(0, 0, 0);
+      const cameraPersp = new THREE.PerspectiveCamera(45, host.clientWidth / host.clientHeight, 0.1, 200);
+      cameraPersp.position.set(0, 8, 10);
+      cameraPersp.lookAt(0, 0, 0);
+
+      const orthoSize = 7.5;
+      const aspect = host.clientWidth / host.clientHeight;
+      const cameraOrtho = new THREE.OrthographicCamera(
+        -orthoSize * aspect,
+        orthoSize * aspect,
+        orthoSize,
+        -orthoSize,
+        0.1,
+        200
+      );
+      cameraOrtho.position.set(0, 16, 0.001);
+      cameraOrtho.lookAt(0, 0, 0);
+
+      let activeCamera = cameraPersp;
 
       // Lights
       const ambient = new THREE.AmbientLight(0xffffff, 0.55);
@@ -175,7 +223,7 @@ export default function Viewport3D({
       scene.add(selectionRing);
 
       // Orbit controls
-      const controls = new OrbitControls(camera, renderer.domElement);
+      const controls = new OrbitControls(activeCamera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.screenSpacePanning = true;
@@ -194,7 +242,7 @@ export default function Viewport3D({
         const rect = renderer.domElement.getBoundingClientRect();
         mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-        raycaster.setFromCamera(mouse, camera);
+        raycaster.setFromCamera(mouse, activeCamera);
 
         const hits = raycaster.intersectObjects([holes, compGroup, wireGroup], true);
         if (hits.length > 0) {
@@ -203,24 +251,24 @@ export default function Viewport3D({
           if (h.object === holes && typeof h.instanceId === 'number') {
             const pos = holeIndexToPos[h.instanceId];
             const label = `${String.fromCharCode(97 + pos.row)}${pos.col + 1}`;
-            setHovered({ kind: 'hole', col: pos.col, row: pos.row, holeLabel: label, world: { x: pos.x, y: pos.y, z: pos.z } });
+            latestRef.current.setHovered({ kind: 'hole', col: pos.col, row: pos.row, holeLabel: label, world: { x: pos.x, y: pos.y, z: pos.z } });
             return { kind: 'hole', ...pos, label };
           }
           // Component mesh
           if (h.object?.userData?.pickType === 'component') {
             const compId = h.object.userData.compId;
-            const def = defs[h.object.userData.compType];
-            setHovered({ kind: 'component', id: compId, name: def?.name || h.object.userData.compType });
+            const def = latestRef.current.defs[h.object.userData.compType];
+            latestRef.current.setHovered({ kind: 'component', id: compId, name: def?.name || h.object.userData.compType });
             return { kind: 'component', id: compId };
           }
           // Wire
           if (h.object?.userData?.pickType === 'wire') {
             const wireId = h.object.userData.wireId;
-            setHovered({ kind: 'wire', id: wireId, name: 'Wire' });
+            latestRef.current.setHovered({ kind: 'wire', id: wireId, name: 'Wire' });
             return { kind: 'wire', id: wireId };
           }
         }
-        setHovered(null);
+        latestRef.current.setHovered(null);
         return null;
       }
 
@@ -228,8 +276,24 @@ export default function Viewport3D({
         if (!pickEnabled) return;
         const hit = pick(e);
 
+        // Dragging component: snap to hovered hole (live, no undo spam)
+        if (dragRef.current.dragging && hit?.kind === 'hole') {
+          const { compId, startCircuit } = dragRef.current;
+          const cur = latestRef.current.circuit;
+          if (!compId || !startCircuit) return;
+          const comp = cur.components?.find((c) => c.id === compId);
+          if (!comp) return;
+          if (comp.anchor?.col === hit.col && comp.anchor?.row === hit.row) return;
+          dragRef.current.moved = true;
+          latestRef.current.setCircuit?.({
+            ...cur,
+            components: cur.components.map((c) => (c.id === compId ? { ...c, anchor: { col: hit.col, row: hit.row } } : c)),
+          });
+        }
+
         // Ghost updates while placing
-        if (mode === 'placing' && placingType && hit?.kind === 'hole') {
+        const { mode: m, placingType: pt } = latestRef.current;
+        if (m === 'placing' && pt && hit?.kind === 'hole') {
           ghost.visible = true;
           ghost.position.set(hit.x, 0.78, hit.z);
           const ok = (hit.col >= 0 && hit.col < 30 && hit.row >= 0 && hit.row < 10);
@@ -240,10 +304,27 @@ export default function Viewport3D({
       }
 
       function onPointerDown(e) {
-        if (!isInteractive) return;
+        if (!latestRef.current || latestRef.current.simRunning) return;
+        const { mode: m } = latestRef.current;
+
+        // Drag component in move mode
+        if (m === 'move') {
+          const hit = pick(e);
+          if (hit?.kind === 'component') {
+            dragRef.current = {
+              dragging: true,
+              compId: hit.id,
+              startCircuit: latestRef.current.circuit,
+              moved: false,
+            };
+            controls.enabled = false;
+            latestRef.current.setSelected?.({ kind: 'component', id: hit.id });
+            return;
+          }
+        }
         // When not tool-selected: LMB rotates (OrbitControls default).
         // In placing/wire mode, LMB should place; we temporarily disable controls.
-        if (mode === 'placing' || mode === 'wire') {
+        if (m === 'placing' || m === 'wire') {
           controls.enabled = false;
         } else {
           controls.enabled = true;
@@ -251,34 +332,62 @@ export default function Viewport3D({
       }
 
       function onPointerUp(e) {
-        if (!isInteractive) return;
+        if (!latestRef.current || latestRef.current.simRunning) return;
+        if (dragRef.current.dragging) {
+          controls.enabled = true;
+          if (dragRef.current.moved) {
+            // Commit once for undo
+            latestRef.current.commit(latestRef.current.circuit);
+          }
+          dragRef.current = { dragging: false, compId: null, startCircuit: null, moved: false };
+          return;
+        }
         const hit = pick(e);
         controls.enabled = true;
         if (!hit) return;
 
+        const { mode: m, placingType: pt, defs: curDefs, circuit: curCircuit, commit: doCommit } = latestRef.current;
+        // Wire mode (two-click)
+        if (m === 'wire' && hit.kind === 'hole') {
+          if (!wireDraftRef.current) {
+            wireDraftRef.current = { from: { col: hit.col, row: hit.row } };
+            return;
+          }
+          const from = wireDraftRef.current.from;
+          wireDraftRef.current = null;
+          if (from.col === hit.col && from.row === hit.row) return;
+          const id = crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`;
+          doCommit({
+            ...curCircuit,
+            wires: [...(curCircuit.wires || []), { id, from, to: { col: hit.col, row: hit.row }, color: '#3b82f6' }],
+          });
+          latestRef.current.setSelected?.({ kind: 'wire', id });
+          return;
+        }
+
         // Minimal placement: store anchor at grid coordinate (col,row) for now.
-        if (mode === 'placing' && placingType) {
-          const def = defs[placingType];
+        if (m === 'placing' && pt && hit.kind === 'hole') {
+          const def = curDefs[pt];
           if (!def) return;
           const id = crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`;
-          commit({
-            ...circuit,
-            components: [...circuit.components, { id, type: placingType, value: def.defaultVal || '', anchor: { col: hit.col, row: hit.row }, rot: 0, props: {} }],
+          doCommit({
+            ...curCircuit,
+            components: [...(curCircuit.components || []), { id, type: pt, value: def.defaultVal || '', anchor: { col: hit.col, row: hit.row }, rot: 0, props: {} }],
           });
-          setSelected({ kind: 'component', id });
+          latestRef.current.setSelected?.({ kind: 'component', id });
           return;
         }
 
         // Selection
         if (hit.kind === 'component') {
-          setSelected({ kind: 'component', id: hit.id });
+          latestRef.current.setSelected?.({ kind: 'component', id: hit.id });
           return;
         }
         if (hit.kind === 'wire') {
-          setSelected({ kind: 'wire', id: hit.id });
+          latestRef.current.setSelected?.({ kind: 'wire', id: hit.id });
           return;
         }
-        setSelected(null);
+        latestRef.current.setSelected?.(null);
       }
 
       function resize() {
@@ -286,8 +395,14 @@ export default function Viewport3D({
         const w = hostRef.current.clientWidth;
         const h = hostRef.current.clientHeight;
         renderer.setSize(w, h);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
+        cameraPersp.aspect = w / h;
+        cameraPersp.updateProjectionMatrix();
+        const a = w / h;
+        cameraOrtho.left = -orthoSize * a;
+        cameraOrtho.right = orthoSize * a;
+        cameraOrtho.top = orthoSize;
+        cameraOrtho.bottom = -orthoSize;
+        cameraOrtho.updateProjectionMatrix();
       }
 
       const ro = new ResizeObserver(resize);
@@ -297,25 +412,40 @@ export default function Viewport3D({
       const onPreset = (e) => {
         const preset = e.detail?.preset;
         if (preset === 1) {
-          camera.position.set(0, 16, 0.001);
+          activeCamera = cameraOrtho;
+          controls.object = activeCamera;
+          cameraOrtho.position.set(0, 16, 0.001);
           controls.target.set(0, 0, 0);
+          controls.enableRotate = false;
         } else if (preset === 2) {
-          camera.position.set(0, 8, 10);
+          activeCamera = cameraPersp;
+          controls.object = activeCamera;
+          cameraPersp.position.set(0, 8, 10);
           controls.target.set(0, 0.25, 0);
+          controls.enableRotate = true;
         } else if (preset === 3) {
-          camera.position.set(0, 2.5, 16);
+          activeCamera = cameraPersp;
+          controls.object = activeCamera;
+          cameraPersp.position.set(0, 2.5, 16);
           controls.target.set(0, 0.25, 0);
+          controls.enableRotate = true;
         } else if (preset === 4) {
           // Detail: zoom in to center (later: selected component)
-          camera.position.set(0, 3.5, 4.5);
+          activeCamera = cameraPersp;
+          controls.object = activeCamera;
+          cameraPersp.position.set(0, 3.5, 4.5);
           controls.target.set(0, 0.25, 0);
+          controls.enableRotate = true;
         }
         controls.update();
       };
 
       const onFit = () => {
-        camera.position.set(0, 10, 12);
+        activeCamera = cameraPersp;
+        controls.object = activeCamera;
+        cameraPersp.position.set(0, 10, 12);
         controls.target.set(0, 0.25, 0);
+        controls.enableRotate = true;
         controls.update();
       };
 
@@ -325,7 +455,8 @@ export default function Viewport3D({
       let raf = 0;
       let lastCircuitKey = '';
       let lastSelKey = '';
-      let wireDraft = null; // {from:{col,row,x,y,z}}
+      const wireMatCache = new Map();
+      let wirePreviewMesh = null;
 
       const makeCompMesh = (comp) => {
         const def = defs[comp.type];
@@ -395,7 +526,7 @@ export default function Viewport3D({
           compGroup.add(mesh);
         }
 
-        // Wires (placeholder straight cylinders for now)
+        // Wires (TubeGeometry with sag)
         wireGroup.clear();
         for (const w of circuit.wires || []) {
           if (!w.from || !w.to) continue;
@@ -403,17 +534,27 @@ export default function Viewport3D({
           const az = startZ + w.from.row * pitchZ;
           const bx = startX + w.to.col * pitchX;
           const bz = startZ + w.to.row * pitchZ;
-          const dx = bx - ax, dz = bz - az;
+          const dx = bx - ax;
+          const dz = bz - az;
           const len = Math.hypot(dx, dz);
-          const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(w.color || '#3b82f6'), roughness: 0.4, metalness: 0.1 });
-          const cyl = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, Math.max(0.01, len), 12), mat);
-          cyl.position.set((ax + bx) / 2, 0.9, (az + bz) / 2);
-          cyl.rotation.y = Math.atan2(dx, dz);
-          cyl.rotation.x = Math.PI / 2;
-          cyl.castShadow = true;
-          cyl.userData.pickType = 'wire';
-          cyl.userData.wireId = w.id;
-          wireGroup.add(cyl);
+
+          const midY = 1.0 + Math.min(1.2, 0.25 + len * 0.35);
+          const p0 = new THREE.Vector3(ax, 0.78, az);
+          const p1 = new THREE.Vector3((ax + bx) / 2, midY, (az + bz) / 2);
+          const p2 = new THREE.Vector3(bx, 0.78, bz);
+          const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
+          const geo = new THREE.TubeGeometry(curve, 32, 0.045, 10, false);
+
+          const colorHex = (w.color || '#3b82f6').toLowerCase();
+          const mat = wireMatCache.get(colorHex) || new THREE.MeshStandardMaterial({ color: new THREE.Color(colorHex), roughness: 0.35, metalness: 0.05 });
+          wireMatCache.set(colorHex, mat);
+
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.castShadow = true;
+          mesh.receiveShadow = false;
+          mesh.userData.pickType = 'wire';
+          mesh.userData.wireId = w.id;
+          wireGroup.add(mesh);
         }
       };
 
@@ -444,11 +585,12 @@ export default function Viewport3D({
         }
 
         // Sim visuals: LED emissive
-        if (sim?.elementStates && compGroup.children.length) {
+        const curSim = latestRef.current.sim;
+        if (curSim?.elementStates && compGroup.children.length) {
           for (const g of compGroup.children) {
             const id = g.userData?.compId;
             if (!id) continue;
-            const st = sim.elementStates.get(id);
+            const st = curSim.elementStates.get(id);
             if (!st) continue;
             g.traverse((o) => {
               if (o.isMesh && o.userData?.ledDome && o.material?.emissive) {
@@ -465,11 +607,43 @@ export default function Viewport3D({
           }
         }
 
-        renderer.render(scene, camera);
+        // Wire preview while drafting
+        const { mode: m, hovered: hv } = latestRef.current;
+        if (m === 'wire' && wireDraftRef.current?.from && hv?.kind === 'hole') {
+          const from = wireDraftRef.current.from;
+          const ax = startX + from.col * pitchX;
+          const az = startZ + from.row * pitchZ;
+          const bx = startX + hv.col * pitchX;
+          const bz = startZ + hv.row * pitchZ;
+          const len = Math.hypot(bx - ax, bz - az);
+          const midY = 1.0 + Math.min(1.2, 0.25 + len * 0.35);
+          const curve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(ax, 0.78, az),
+            new THREE.Vector3((ax + bx) / 2, midY, (az + bz) / 2),
+            new THREE.Vector3(bx, 0.78, bz),
+          ]);
+          const geo = new THREE.TubeGeometry(curve, 24, 0.04, 10, false);
+          const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#ff8c42'), transparent: true, opacity: 0.65, roughness: 0.35, metalness: 0.0 });
+          if (wirePreviewMesh) {
+            wirePreviewMesh.geometry.dispose?.();
+            wirePreviewMesh.geometry = geo;
+          } else {
+            wirePreviewMesh = new THREE.Mesh(geo, mat);
+            wirePreviewMesh.castShadow = false;
+            wirePreviewMesh.userData.preview = true;
+            wireGroup.add(wirePreviewMesh);
+          }
+        } else if (wirePreviewMesh) {
+          wireGroup.remove(wirePreviewMesh);
+          wirePreviewMesh.geometry.dispose?.();
+          wirePreviewMesh = null;
+        }
+
+        renderer.render(scene, activeCamera);
       };
       tick();
 
-      threeRef.current = { THREE, renderer, scene, camera, controls, holes, holeIndexToPos };
+      threeRef.current = { THREE, renderer, scene, cameraPersp, cameraOrtho, get activeCamera() { return activeCamera; }, controls, holes, holeIndexToPos };
 
       cleanup = () => {
         window.removeEventListener('prototyper:presetView', onPreset);
@@ -495,37 +669,6 @@ export default function Viewport3D({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Wire mode state (two-click) lives in component scope
-  const wireDraftRef = useRef(null); // {from:{col,row}}
-
-  useEffect(() => {
-    const api = threeRef.current;
-    if (!api?.renderer) return;
-    const el = api.renderer.domElement;
-    const onUp = (e) => {
-      if (!isInteractive) return;
-      if (mode !== 'wire') return;
-      // We rely on hovered hole info (updated by pick)
-      if (hovered?.kind !== 'hole') return;
-      const h = { col: hovered.col, row: hovered.row };
-      if (!wireDraftRef.current) {
-        wireDraftRef.current = { from: h };
-        return;
-      }
-      const from = wireDraftRef.current.from;
-      wireDraftRef.current = null;
-      if (from.col === h.col && from.row === h.row) return;
-      const id = crypto.randomUUID?.() || `${Date.now()}_${Math.random()}`;
-      commit({
-        ...circuit,
-        wires: [...(circuit.wires || []), { id, from, to: h, color: '#3b82f6' }],
-      });
-      setSelected({ kind: 'wire', id });
-    };
-    el.addEventListener('pointerup', onUp);
-    return () => el.removeEventListener('pointerup', onUp);
-  }, [circuit, commit, hovered, isInteractive, mode, setSelected]);
 
   return (
     <div className="absolute inset-0">

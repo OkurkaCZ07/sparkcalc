@@ -26,6 +26,7 @@ export default function PrototyperApp() {
   const [mode, setMode] = useState('move'); // move | wire | placing
   const [placingType, setPlacingType] = useState(null);
   const [simRunning, setSimRunning] = useState(false);
+  const [viewMode, setViewMode] = useState('3d'); // 3d | 2d
 
   const [selected, setSelected] = useState(null); // {kind:'component'|'wire', id}
   const [hovered, setHovered] = useState(null); // {kind:'hole'|'component'|'wire', ...}
@@ -210,6 +211,14 @@ export default function PrototyperApp() {
         onToggleFullscreen={() => {
           if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
           else document.exitFullscreen?.();
+        }}
+        viewMode={viewMode}
+        onToggleView={() => {
+          setViewMode((v) => {
+            const next = v === '3d' ? '2d' : '3d';
+            window.dispatchEvent(new CustomEvent('prototyper:presetView', { detail: { preset: next === '2d' ? 1 : 2 } }));
+            return next;
+          });
         }}
         score={sim?.summary?.score ?? null}
       />

@@ -10,6 +10,8 @@ export default function Toolbar({
   onClear,
   onShare,
   onToggleFullscreen,
+  onToggleView,
+  viewMode,
   score,
 }) {
   const scoreColor =
@@ -59,6 +61,9 @@ export default function Toolbar({
         </ToolBtn>
         <ToolBtn active={mode === 'move'} onClick={() => onModeChange('move')} title="M">
           ↔ Move
+        </ToolBtn>
+        <ToolBtn active={viewMode === '2d'} onClick={onToggleView} title="1/2">
+          {viewMode === '2d' ? '▦ 2D' : '⬚ 3D'}
         </ToolBtn>
 
         <div className="hidden md:flex items-center gap-1 ml-2 text-[10px] font-mono" style={{ color: 'var(--sc-dim)' }}>

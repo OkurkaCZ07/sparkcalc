@@ -21,6 +21,11 @@ export default function RightPanel({
     return circuit.components.find((c) => c.id === selected.id) || null;
   }, [circuit.components, selected]);
 
+  const selWire = useMemo(() => {
+    if (selected?.kind !== 'wire') return null;
+    return circuit.wires.find((w) => w.id === selected.id) || null;
+  }, [circuit.wires, selected]);
+
   const selDef = selComp ? defs[selComp.type] : null;
   const selSim = selComp ? sim?.elementStates?.get?.(selComp.id) : null;
 
@@ -29,6 +34,14 @@ export default function RightPanel({
     onUpdateCircuit({
       ...circuit,
       components: circuit.components.map((c) => (c.id === selComp.id ? { ...c, ...patch } : c)),
+    });
+  };
+
+  const updateWire = (patch) => {
+    if (!selWire) return;
+    onUpdateCircuit({
+      ...circuit,
+      wires: circuit.wires.map((w) => (w.id === selWire.id ? { ...w, ...patch } : w)),
     });
   };
 
@@ -52,8 +65,35 @@ export default function RightPanel({
 
         {open && (
           <div className="p-3 overflow-auto flex-1 min-h-0">
-            {!selComp ? (
+            {(!selComp && !selWire) ? (
               <div className="text-xs" style={{ color: 'var(--sc-dim)' }}>Select a component or wire.</div>
+            ) : selWire ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border p-3" style={{ borderColor: 'var(--sc-border)', background: 'var(--sc-surface2)' }}>
+                  <div className="text-sm font-bold" style={{ color: 'var(--sc-text)' }}>Wire</div>
+                  <div className="mt-1 text-[11px] font-mono" style={{ color: 'var(--sc-dim)' }}>
+                    id: {selWire.id.slice(0, 8)}
+                  </div>
+                  <div className="mt-3 space-y-2 text-[12px]">
+                    <label className="flex items-center justify-between gap-2">
+                      <span style={{ color: 'var(--sc-dim)' }}>Color</span>
+                      <input
+                        type="color"
+                        value={selWire.color || '#3b82f6'}
+                        onChange={(e) => updateWire({ color: e.target.value })}
+                      />
+                    </label>
+                    <button
+                      className="w-full px-2 py-1 rounded-lg border text-xs font-bold"
+                      style={{ borderColor: 'rgba(239,68,68,0.45)', background: 'rgba(239,68,68,0.10)', color: '#fca5a5' }}
+                      onClick={() => onUpdateCircuit({ ...circuit, wires: circuit.wires.filter((w) => w.id !== selWire.id) })}
+                    >
+                      Delete wire
+                    </button>
+                  </div>
+                </div>
+                {children}
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="rounded-xl border p-3" style={{ borderColor: 'var(--sc-border)', background: 'var(--sc-surface2)' }}>
