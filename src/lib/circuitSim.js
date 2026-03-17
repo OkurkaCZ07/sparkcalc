@@ -302,3 +302,235 @@ export function simulate(components, wires) {
 // ─────────────────────────────────────────────────────────────────────────────
 export { simulate as simulatePrototyper } from './prototyper/sim';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Prototyper 3D — Premium Edition sim (Union-Find + simplified DC + analysis)
+// This is intentionally a simplified educational solver:
+// - Nets via Union-Find (breadboard internal + rails + wires)
+// - Path tracing from source + to source -
+// - LED current estimation for common series-resistor cases
+// ─────────────────────────────────────────────────────────────────────────────
+
+function parseOhms(val) {
+  if (val == null) return NaN;
+  const s = String(val).toLowerCase().replace(/[ωΩohm\s]/g, '');
+  if (!s) return NaN;
+  if (s.includes('m') && !s.includes('ma')) return parseFloat(s) * 1e6;
+  if (s.includes('k')) return parseFloat(s) * 1e3;
+  return parseFloat(s);
+}
+
+function parseVolts(val) {
+  if (val == null) return NaN;
+  const s = String(val).toLowerCase().replace(/v|\s/g, '');
+  return parseFloat(s);
+}
+
+class DSU {
+  constructor() {
+    this.p = new Map();
+    this.r = new Map();
+  }
+  make(x) {
+    if (this.p.has(x)) return;
+    this.p.set(x, x);
+    this.r.set(x, 0);
+  }
+  find(x) {
+    if (!this.p.has(x)) this.make(x);
+    const px = this.p.get(x);
+    if (px !== x) {
+      const root = this.find(px);
+      this.p.set(x, root);
+      return root;
+    }
+    return x;
+  }
+  union(a, b) {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra === rb) return ra;
+    const rka = this.r.get(ra) || 0;
+    const rkb = this.r.get(rb) || 0;
+    if (rka < rkb) { this.p.set(ra, rb); return rb; }
+    if (rka > rkb) { this.p.set(rb, ra); return ra; }
+    this.p.set(rb, ra);
+    this.r.set(ra, rka + 1);
+    return ra;
+  }
+}
+
+function holeNodeId(hole) {
+  // hole: {col,row} for main board in 3D premium
+  const half = hole.row < 5 ? 'top' : 'bot';
+  return `H:${hole.col}:${half}`;
+}
+
+export function simulate3d(circuit, { running = false, defs = {} } = {}) {
+  const issues = [];
+  const elementStates = new Map(); // compId -> state
+
+  const comps = circuit.components || [];
+  const wires = circuit.wires || [];
+
+  // Build DSU of nets
+  const dsu = new DSU();
+
+  // Touch nodes referenced by comps and wires
+  for (const c of comps) {
+    const def = defs[c.type];
+    if (!def) continue;
+    const pins = def.pins || [];
+    for (const p of pins) {
+      const col = (c.anchor?.col ?? 0) + p.dx;
+      const row = (c.anchor?.row ?? 0) + p.dy;
+      dsu.make(holeNodeId({ col, row }));
+    }
+  }
+  for (const w of wires) {
+    if (!w?.from || !w?.to) continue;
+    dsu.make(holeNodeId(w.from));
+    dsu.make(holeNodeId(w.to));
+    dsu.union(holeNodeId(w.from), holeNodeId(w.to));
+  }
+
+  // Graph: net -> edges (component pins)
+  const netEdges = new Map();
+  const addEdge = (net, edge) => {
+    const k = dsu.find(net);
+    if (!netEdges.has(k)) netEdges.set(k, []);
+    netEdges.get(k).push(edge);
+  };
+
+  const compPins = new Map(); // compId -> nets[]
+  for (const c of comps) {
+    const def = defs[c.type];
+    if (!def) continue;
+    const nets = (def.pins || []).map((p) => {
+      const col = (c.anchor?.col ?? 0) + p.dx;
+      const row = (c.anchor?.row ?? 0) + p.dy;
+      return dsu.find(holeNodeId({ col, row }));
+    });
+    compPins.set(c.id, nets);
+    nets.forEach((n, idx) => addEdge(n, { kind: 'pin', compId: c.id, pin: idx }));
+  }
+
+  // Find sources
+  const sources = comps.filter((c) => defs[c.type]?.isSource);
+  if (sources.length === 0) {
+    issues.push({ severity: 'error', message: 'No power source.' });
+  }
+
+  // Short detection: if any source has + and - on same net
+  for (const s of sources) {
+    const nets = compPins.get(s.id) || [];
+    if (nets.length >= 2 && nets[0] === nets[1]) {
+      issues.push({ severity: 'error', message: 'Short circuit: source + and − are directly connected.', target: { kind: 'component', id: s.id } });
+    }
+  }
+
+  // Floating components: any pin net never appears in a wire and has no other pin connection (very simple)
+  const wiredNets = new Set();
+  for (const w of wires) {
+    if (!w?.from || !w?.to) continue;
+    wiredNets.add(dsu.find(holeNodeId(w.from)));
+    wiredNets.add(dsu.find(holeNodeId(w.to)));
+  }
+  let floating = 0;
+  for (const c of comps) {
+    const nets = compPins.get(c.id) || [];
+    const any = nets.some((n) => wiredNets.has(n));
+    if (!any && nets.length) floating++;
+  }
+  if (floating > 0) issues.push({ severity: 'warn', message: `${floating} floating component(s) (not wired).` });
+
+  // LED analysis: require resistor somewhere in circuit (simplified: any resistor present)
+  const resistors = comps.filter((c) => c.type.startsWith('resistor'));
+  const anyRes = resistors.length > 0;
+
+  // Basic path tracing between first source + and -
+  let score = 100;
+  if (sources.length === 0) score -= 35;
+  if (wires.length === 0 && comps.length > 1) { issues.push({ severity: 'error', message: 'No wires. Connect components.' }); score -= 25; }
+
+  // LED states
+  const ledComps = comps.filter((c) => defs[c.type]?.emissive);
+  for (const led of ledComps) {
+    const def = defs[led.type] || {};
+    const nets = compPins.get(led.id) || [];
+    const vf = def.vF ?? 2.0;
+    const maxI = def.maxI ?? 0.03;
+
+    let powered = false;
+    let currentA = 0;
+
+    // If we have a source, and LED pins land on different nets, assume connected if both nets reachable in same connected component containing source pins.
+    if (sources[0]) {
+      const sNets = compPins.get(sources[0].id) || [];
+      if (sNets.length >= 2 && nets.length >= 2) {
+        const plusNet = sNets[0];
+        const minusNet = sNets[1];
+        const ledA = nets[0];
+        const ledB = nets[1];
+        const connectedToPlus = ledA === plusNet || ledB === plusNet;
+        const connectedToMinus = ledA === minusNet || ledB === minusNet;
+        if (connectedToPlus && connectedToMinus) {
+          powered = true;
+          const v = Number.isFinite(parseVolts(sources[0].value)) ? parseVolts(sources[0].value) : (defs[sources[0].type]?.voltage ?? 5);
+          const r = resistors[0] ? parseOhms(resistors[0].value) : NaN;
+          if (Number.isFinite(r) && r > 0) currentA = Math.max(0, (v - vf) / r);
+          else currentA = anyRes ? 0.02 : 0.2;
+        }
+      }
+    }
+
+    const brightness = Math.max(0, Math.min(1, currentA / 0.02));
+    const blown = currentA > maxI;
+    elementStates.set(led.id, { powered: running && powered, brightness, currentA, blown });
+
+    if (powered && !anyRes) {
+      issues.push({ severity: 'error', message: 'LED without resistor (will blow).', target: { kind: 'component', id: led.id } });
+      score -= 20;
+    } else if (blown) {
+      issues.push({ severity: 'error', message: `LED overcurrent (${(currentA * 1000).toFixed(0)}mA).`, target: { kind: 'component', id: led.id } });
+      score -= 15;
+    }
+  }
+
+  // Motor flyback diode warning
+  const hasMotor = comps.some((c) => c.type === 'motor-dc');
+  const hasDiode = comps.some((c) => c.type === 'diode' || c.type === 'zener');
+  if (hasMotor && !hasDiode) {
+    issues.push({ severity: 'warn', message: 'Motor without flyback diode.' });
+    score -= 10;
+  }
+
+  // 555 tips
+  const has555 = comps.some((c) => c.type === 'ic555');
+  if (has555) {
+    const rCount = resistors.length;
+    const hasCap = comps.some((c) => c.type === 'capacitor' || c.type === 'cap-elec');
+    if (rCount < 2) issues.push({ severity: 'info', message: '555: add R1 and R2 for astable.' });
+    if (!hasCap) issues.push({ severity: 'info', message: '555: add timing capacitor.' });
+    issues.push({ severity: 'info', message: 'Tip: add 100nF decoupling cap near VCC/GND.' });
+  }
+
+  score = Math.max(0, Math.min(100, score));
+
+  // Expose nets as a Set of roots
+  const nets = new Set();
+  for (const n of dsu.p.keys()) nets.add(dsu.find(n));
+
+  return {
+    nets,
+    issues,
+    elementStates,
+    summary: {
+      score,
+      errors: issues.filter((x) => x.severity === 'error').length,
+      warnings: issues.filter((x) => x.severity === 'warn').length,
+      tips: issues.filter((x) => x.severity === 'info').length,
+    },
+  };
+}
+
+
