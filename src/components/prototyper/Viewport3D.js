@@ -458,8 +458,8 @@ export default function Viewport3D({
       const wireMatCache = new Map();
       let wirePreviewMesh = null;
 
-      const makeCompMesh = (comp) => {
-        const def = defs[comp.type];
+      const makeCompMesh = (comp, curDefs) => {
+        const def = curDefs[comp.type];
         const color = new THREE.Color(def?.color || '#ff8c42');
         const group = new THREE.Group();
         group.userData.pickType = 'component';
@@ -514,10 +514,15 @@ export default function Viewport3D({
       };
 
       const rebuildSceneFromCircuit = () => {
+        const curCircuit = latestRef.current.circuit || { components: [], wires: [] };
+        const curDefs = latestRef.current.defs || {};
+        const comps = curCircuit.components || [];
+        const wiresList = curCircuit.wires || [];
+
         // Components
         compGroup.clear();
-        for (const comp of circuit.components || []) {
-          const mesh = makeCompMesh(comp);
+        for (const comp of comps) {
+          const mesh = makeCompMesh(comp, curDefs);
           const anchor = comp.anchor || { col: 0, row: 0 };
           const x = startX + anchor.col * pitchX;
           const z = startZ + anchor.row * pitchZ;
@@ -528,7 +533,7 @@ export default function Viewport3D({
 
         // Wires (TubeGeometry with sag)
         wireGroup.clear();
-        for (const w of circuit.wires || []) {
+        for (const w of wiresList) {
           if (!w.from || !w.to) continue;
           const ax = startX + w.from.col * pitchX;
           const az = startZ + w.from.row * pitchZ;
@@ -556,26 +561,40 @@ export default function Viewport3D({
           mesh.userData.wireId = w.id;
           wireGroup.add(mesh);
         }
+        // wireGroup.clear() above detached the live wire-draft preview; put it back for this frame
+        if (wirePreviewMesh) wireGroup.add(wirePreviewMesh);
       };
 
       const tick = () => {
         raf = requestAnimationFrame(tick);
-        controls.enabled = mode === 'move';
+        const latest = latestRef.current;
+        const curCircuit = latest.circuit || { components: [], wires: [] };
+        const curComponents = curCircuit.components || [];
+        const curWires = curCircuit.wires || [];
+
+        controls.enabled = latest.mode === 'move';
         controls.update();
 
-        // Rebuild if circuit changed (cheap key)
-        const circuitKey = `${(circuit.components || []).length}:${(circuit.wires || []).length}:${(circuit.components || []).map((c) => c.id).join(',')}:${(circuit.wires || []).map((w) => w.id).join(',')}`;
+        // Rebuild if circuit changed (cheap key) — always from latestRef, not render-effect closure
+        const compKey = curComponents
+          .map((c) => `${c.id}:${c.anchor?.col ?? ''},${c.anchor?.row ?? ''}:${c.rot || 0}`)
+          .join('|');
+        const wireKey = curWires
+          .map((w) => `${w.id}:${w.from?.col ?? ''},${w.from?.row ?? ''}->${w.to?.col ?? ''},${w.to?.row ?? ''}:${w.color || ''}`)
+          .join('|');
+        const circuitKey = `${curComponents.length}:${curWires.length}:${compKey}:${wireKey}`;
         if (circuitKey !== lastCircuitKey) {
           rebuildSceneFromCircuit();
           lastCircuitKey = circuitKey;
         }
 
         // Update selection ring
-        const selKey = selected ? `${selected.kind}:${selected.id}` : '';
+        const sel = latest.selected;
+        const selKey = sel ? `${sel.kind}:${sel.id}` : '';
         if (selKey !== lastSelKey) {
           selectionRing.visible = false;
-          if (selected?.kind === 'component') {
-            const m = compGroup.children.find((x) => x.userData?.compId === selected.id);
+          if (sel?.kind === 'component') {
+            const m = compGroup.children.find((x) => x.userData?.compId === sel.id);
             if (m) {
               selectionRing.position.set(m.position.x, 0.58, m.position.z);
               selectionRing.visible = true;
